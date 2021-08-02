@@ -8,7 +8,7 @@ product_action_playbooks = [
         install: 'proxysql.yml',
         upgrade: 'proxysql_upgrade.yml',
     ],
-    pxb24: [
+    proxysql2 [
         install: 'proxysql2.yml',
         upgrade: 'proxysql2_upgrade.yml'',
     ]
@@ -154,25 +154,6 @@ pipeline {
                     }
                 }
 
-                stage('Upstream') {
-                    agent {
-                        label params.node_to_test
-                    }
-
-                    steps {
-                        runPlaybook("upstream")
-                    }
-                }
-
-                stage('Tarball') {
-                    agent {
-                        label params.node_to_test
-                    }
-
-                    steps {
-                        runPlaybook("tarball")
-                    }
-                }
             }
         }
     }
