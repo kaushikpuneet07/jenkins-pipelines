@@ -10,7 +10,7 @@ product_action_playbooks = [
     ],
     proxysql2 [
         install: 'proxysql2.yml',
-        upgrade: 'proxysql2_upgrade.yml'',
+        upgrade: 'proxysql2_upgrade.yml',
     ]
 ]
 
