@@ -1,4 +1,4 @@
-library changelog: false, identifier: 'lib@master', retriever: modernSCM([
+library changelog: false, identifier: 'lib@PSQLADM-329', retriever: modernSCM([
     $class: 'GitSCMSource',
     remote: 'https://github.com/kaushikpuneet07/jenkins-pipelines.git'
 ]) _

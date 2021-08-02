@@ -11,7 +11,7 @@
             - git:
                 url: https://github.com/kaushikpuneet07/jenkins-pipelines.git
                 branches:
-                    - 'master'
+                    - 'PSQLADM-329'
                 wipe-workspace: true
         lightweight-checkout: true
         script-path: proxysql/proxysql-package-testing-all.groovy
