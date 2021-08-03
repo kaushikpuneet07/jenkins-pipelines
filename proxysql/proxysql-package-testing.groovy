@@ -4,11 +4,11 @@ library changelog: false, identifier: 'lib@PSQLADM-329', retriever: modernSCM([
 ]) _
 
 product_action_playbooks = [
-    proxysql [
+    proxysql: [
         install: 'proxysql.yml',
         upgrade: 'proxysql_upgrade.yml',
     ],
-    proxysql2 [
+    proxysql2: [
         install: 'proxysql2.yml',
         upgrade: 'proxysql2_upgrade.yml',
     ]
