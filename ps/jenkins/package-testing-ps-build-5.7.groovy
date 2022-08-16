@@ -1,6 +1,6 @@
 library changelog: false, identifier: 'lib@master', retriever: modernSCM([
     $class: 'GitSCMSource',
-    remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
+    remote: 'https://github.com/kaushikpuneet07/jenkins-pipelines.git'
 ]) _
 
 setup_rhel_package_tests = { ->
@@ -103,7 +103,7 @@ void runPlaybook(String action_to_test) {
     setup_package_tests()
 
     sh '''
-        git clone --depth 1 https://github.com/Percona-QA/package-testing
+        git clone --depth 1 -b plugin-test https://github.com/kaushikpuneet07/package-testing
     '''
 
     sh """
