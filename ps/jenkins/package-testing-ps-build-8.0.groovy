@@ -32,6 +32,7 @@ setup_stretch_package_tests = { ->
 
 setup_debian_package_tests = { ->
     sh '''
+        apt-get install -y sudo
         sudo apt-get update
         sudo apt-get install -y ansible git wget
     '''
