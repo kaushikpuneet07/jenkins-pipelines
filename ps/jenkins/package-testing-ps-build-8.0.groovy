@@ -238,7 +238,10 @@ pipeline {
 
                 stage("Kmip") {
                     agent {
-                        label params.node_to_test
+                        docker  {
+                            image 'altmannmarcelo/kmip:latest'
+                            label 'docker'
+                        }
                     }
 
                     when {
