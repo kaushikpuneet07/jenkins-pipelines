@@ -32,7 +32,10 @@ setup_stretch_package_tests = { ->
 
 setup_debian_package_tests = { ->
     sh '''
-        apt-get install -y sudo
+        sudo apt-get install -y docker.io
+        sudo docker run -d --security-opt seccomp=unconfined --cap-add=NET_ADMIN --rm -p 5696:5696 --name kmip altmannmarcelo/kmip:latest
+        sudo docker exec -it kmip /bin/bash
+        apt-get install sudo 
         sudo apt-get update
         sudo apt-get install -y ansible git wget
     '''
@@ -239,10 +242,7 @@ pipeline {
 
                 stage("Kmip") {
                     agent {
-                        docker  {
-                            image 'altmannmarcelo/kmip:latest'
-                            label 'docker'
-                        }
+                        label params.node_to_test
                     }
 
                     when {
