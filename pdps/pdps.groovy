@@ -1,4 +1,4 @@
-library changelog: false, identifier: "lib@master", retriever: modernSCM([
+library changelog: false, identifier: "lib@sources", retriever: modernSCM([
     $class: 'GitSCMSource',
     remote: 'https://github.com/kaushikpuneet07/jenkins-pipelines.git'
 ])
@@ -58,7 +58,7 @@ pipeline {
             choices: pdpsScenarios()
         )
         string(
-            defaultValue: 'master',
+            defaultValue: 'source-test',
             description: 'Branch for package-testing repository',
             name: 'TESTING_BRANCH'
         )
@@ -96,7 +96,7 @@ pipeline {
             steps {
                 deleteDir()
                 checkOrchVersionParam()
-                git poll: false, branch: sources, url: 'https://github.com/kaushikpuneet07/package-testing.git'
+                git poll: false, branch: TESTING_BRANCH, url: 'https://github.com/kaushikpuneet07/package-testing.git'
             }
         }
         stage ('Prepare') {
