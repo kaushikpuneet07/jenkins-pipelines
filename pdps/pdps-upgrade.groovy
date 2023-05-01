@@ -1,6 +1,6 @@
-library changelog: false, identifier: "lib@master", retriever: modernSCM([
+library changelog: false, identifier: "lib@sources", retriever: modernSCM([
     $class: 'GitSCMSource',
-    remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
+    remote: 'https://github.com/kaushikpuneet07/jenkins-pipelines.git'
 ])
 
 pipeline {
@@ -46,7 +46,7 @@ pipeline {
             name: 'VERSION'
         )
         string(
-            defaultValue: 'master',
+            defaultValue: 'source-test',
             description: 'Branch for testing repository',
             name: 'TESTING_BRANCH'
         )
@@ -95,7 +95,7 @@ pipeline {
             steps {
                 deleteDir()
                 checkOrchVersionParam()
-                git poll: false, branch: TESTING_BRANCH, url: 'https://github.com/Percona-QA/package-testing.git'
+                git poll: false, branch: TESTING_BRANCH, url: 'https://github.com/kaushikpuneet07/package-testing.git'
             }
         }
         stage ('Prepare') {
