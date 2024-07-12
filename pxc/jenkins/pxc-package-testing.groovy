@@ -1,6 +1,6 @@
-library changelog: false, identifier: 'lib@master', retriever: modernSCM([
+library changelog: false, identifier: 'lib@fix-pxc', retriever: modernSCM([
     $class: 'GitSCMSource',
-    remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
+    remote: 'https://github.com/kaushikpuneet07/jenkins-pipelines.git'
 ]) _
 
 import groovy.transform.Field
@@ -463,7 +463,7 @@ def setup(){
                         sudo yum install -y epel-release 
                         sudo yum install -y git jq
                         rm -rf package-testing                    
-                        git clone https://github.com/Percona-QA/package-testing --branch master
+                        git clone https://github.com/kaushikpuneet07/package-testing --branch fix-pxc
                     '''
 }
 
