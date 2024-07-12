@@ -463,7 +463,7 @@ def setup(){
                         sudo yum install -y epel-release 
                         sudo yum install -y git jq
                         rm -rf package-testing                    
-                        git clone https://github.com/kaushikpuneet07/package-testing --branch fix-pxc
+                        git clone https://github.com/kaushikpuneet07/package-testing --branch fix-tarball-eol
                     '''
 }
 
