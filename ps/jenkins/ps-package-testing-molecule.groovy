@@ -1,8 +1,8 @@
 
 
-    library changelog: false, identifier: "lib@master", retriever: modernSCM([
+    library changelog: false, identifier: "lib@fix-pack-80-84", retriever: modernSCM([
         $class: 'GitSCMSource',
-        remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
+        remote: 'https://github.com/kaushikpuneet07/jenkins-pipelines.git'
     ])
 
     pipeline {
@@ -29,7 +29,7 @@
             name: 'install_repo'
         )
         string(
-            defaultValue: 'https://github.com/Percona-QA/package-testing.git',
+            defaultValue: 'https://github.com/kaushikpuneet07/package-testing.git',
             description: 'repo name',
             name: 'git_repo',
             trim: false
@@ -78,7 +78,7 @@
             stage('Checkout') {
                 steps {
                     deleteDir()
-                    git poll: false, branch: "master", url: "https://github.com/Percona-QA/package-testing.git"
+                    git poll: false, branch: "fix-pack-80-84", url: "https://github.com/kaushikpuneet07/package-testing.git"
                 }
             }
 
