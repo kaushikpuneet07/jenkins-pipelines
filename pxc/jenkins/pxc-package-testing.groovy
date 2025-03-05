@@ -1,6 +1,6 @@
-library changelog: false, identifier: 'lib@master', retriever: modernSCM([
+library changelog: false, identifier: 'lib@pxc-fox', retriever: modernSCM([
     $class: 'GitSCMSource',
-    remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
+    remote: 'https://github.com/kaushikpuneet07/jenkins-pipelines.git'
 ]) _
 
 import groovy.transform.Field
@@ -516,7 +516,7 @@ def setup(){
                 installMoleculeBookworm()
                     sh '''
                         rm -rf package-testing                    
-                        git clone https://github.com/Percona-QA/package-testing --branch master
+                        git clone https://github.com/kaushikpuneet07/package-testing --branch pxc-fox
                     '''
 }
 
