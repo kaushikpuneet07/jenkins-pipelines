@@ -13,8 +13,6 @@ List all_nodes = [
                 'debian-11',
                 'debian-12-arm',
                 'debian-11-arm',
-                'debian-10',
-                'centos-7',
                 'ol-8',
                 'ol-9',
                 'rhel-8',
