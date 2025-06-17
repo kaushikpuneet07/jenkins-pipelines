@@ -323,7 +323,7 @@ def setup(){
                     sh '''
 
                         rm -rf package-testing
-                        git clone https://github.com/Percona-QA/package-testing --branch master
+                        git clone https://github.com/kaushikpuneet07/package-testing --branch fix-pro-pxc-main
                     '''
 }
 
