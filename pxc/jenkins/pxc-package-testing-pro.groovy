@@ -1,4 +1,4 @@
-library changelog: false, identifier: 'lib@pxc-package-testing-pro.groovy', retriever: modernSCM([
+library changelog: false, identifier: 'lib@fix-pro-pxc-main', retriever: modernSCM([
     $class: 'GitSCMSource',
     remote: 'https://github.com/kaushikpuneet07/jenkins-pipelines.git'
 ]) _
