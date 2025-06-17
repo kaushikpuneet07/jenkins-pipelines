@@ -1,6 +1,6 @@
-library changelog: false, identifier: 'lib@master', retriever: modernSCM([
+library changelog: false, identifier: 'lib@pxc-package-testing-pro.groovy', retriever: modernSCM([
     $class: 'GitSCMSource',
-    remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
+    remote: 'https://github.com/kaushikpuneet07/jenkins-pipelines.git'
 ]) _
 
 import groovy.transform.Field
@@ -118,7 +118,7 @@ def runMoleculeAction(String action, String product_to_test, String scenario, St
                 sh"""
                     . virtenv/bin/activate
                     export MOLECULE_DEBUG=1
-                    #export DESTROY_ENV=no
+                    export DESTROY_ENV=no
                     
                     mkdir -p ${WORKSPACE}/install
                     mkdir -p ${WORKSPACE}/min_upgrade
@@ -140,7 +140,7 @@ def runMoleculeAction(String action, String product_to_test, String scenario, St
                 sh"""
                     . virtenv/bin/activate
                     export MOLECULE_DEBUG=1
-                    #export DESTROY_ENV=no
+                    export DESTROY_ENV=no
 
                     cd package-testing/molecule/pxc
 
@@ -323,7 +323,7 @@ def setup(){
                     sh '''
 
                         rm -rf package-testing
-                        git clone https://github.com/Percona-QA/package-testing --branch master
+                        git clone https://github.com/kaushikpuneet07/package-testing --branch fix-pro-pxc-main
                     '''
 }
 
