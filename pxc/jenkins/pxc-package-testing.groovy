@@ -1165,11 +1165,12 @@ pipeline {
          }
     }
 
-
+/*
     post {
         always {
             deleteBuildInstances()
         }
     }
+*/
 }
 
