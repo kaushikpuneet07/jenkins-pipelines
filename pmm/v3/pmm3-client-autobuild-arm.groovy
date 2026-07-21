@@ -3,9 +3,14 @@ library changelog: false, identifier: 'lib@master', retriever: modernSCM([
     remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
 ]) _
 
+library changelog: false, identifier: 'v3lib@master', retriever: modernSCM(
+  scm: [$class: 'GitSCMSource', remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'],
+  libraryPath: 'pmm/v3/'
+)
+
 pipeline {
     agent {
-        label 'agent-arm64-ol9'
+        label params.USE_ONDEMAND ? 'agent-arm64-ondemand' : 'agent-arm64'
     }
     parameters {
         string(
@@ -14,9 +19,14 @@ pipeline {
             name: 'GIT_BRANCH'
         )
         choice(
-            choices: ['experimental', 'testing', 'laboratory'],
-            description: 'Publish packages to repositories: testing for RC, experimental for 3-dev-latest, laboratory for FBs',
+            choices: ['experimental', 'testing'],
+            description: 'Publish packages to repositories: testing for RC, experimental for 3-dev-latest',
             name: 'DESTINATION'
+        )
+        booleanParam(
+            defaultValue: false,
+            description: 'Use on-demand instances instead of spot (for RC/Release builds)',
+            name: 'USE_ONDEMAND'
         )
     }
     options {
@@ -66,7 +76,9 @@ pipeline {
         stage('Build client binary') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'pmm-staging-slave', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
-                    sh """
+                    sh '''
+                        export RPMBUILD_DOCKER_IMAGE=public.ecr.aws/e7j3v3n0/rpmbuild:3-ol8
+
                         ${PATH_TO_SCRIPTS}/build-client-binary
                         ls -la "results/tarball" || :
                         aws s3 cp --only-show-errors --acl public-read results/tarball/pmm-client-*.tar.gz \
@@ -74,7 +86,7 @@ pipeline {
                         aws s3 cp --only-show-errors --acl public-read --copy-props none \
                             s3://pmm-build-cache/PR-BUILDS/pmm-client-arm/pmm-client-latest-${BUILD_ID}.tar.gz \
                             s3://pmm-build-cache/PR-BUILDS/pmm-client-arm/pmm-client-latest.tar.gz
-                    """
+                    '''
                 }
                 stash includes: 'results/tarball/*.tar.*', name: 'binary.tarball'
                 uploadTarball('binary')
@@ -108,16 +120,16 @@ pipeline {
             parallel {
                 stage('Build client source rpm EL9') {
                     steps {
-                        sh """
+                        sh '''
                             ${PATH_TO_SCRIPTS}/build-client-srpm public.ecr.aws/e7j3v3n0/rpmbuild:3
-                        """
+                        '''
                     }
                 }
             }
             post {
                 success {
                     stash includes: 'results/srpm/pmm*-client-*.src.rpm', name: 'rpms'
-                    uploadRPM()
+                    uploadPMM3RPM()
                 }
             }
         }
@@ -130,31 +142,43 @@ pipeline {
                 }
                 stage('Build client binary rpm EL9') {
                     steps {
-                        sh """
+                        sh '''
                             ${PATH_TO_SCRIPTS}/build-client-rpm public.ecr.aws/e7j3v3n0/rpmbuild:3
-                        """
+                        '''
+                    }
+                }
+                stage('Build client binary rpm EL10') {
+                    steps {
+                        sh '${PATH_TO_SCRIPTS}/build-client-rpm oraclelinux:10'
+                    }
+                }
+                stage('Build client binary rpm AL2023') {
+                    steps {
+                        sh '''
+                            ${PATH_TO_SCRIPTS}/build-client-rpm public.ecr.aws/amazonlinux/amazonlinux:2023
+                        '''
                     }
                 }
             }
             post {
                 success {
                     stash includes: 'results/rpm/pmm*-client-*.rpm', name: 'rpms'
-                    uploadRPM()
+                    uploadPMM3RPM()
                 }
             }
         }
         stage('Build client source deb') {
             steps {
-                sh "${PATH_TO_SCRIPTS}/build-client-sdeb ubuntu:focal"
+                sh "${PATH_TO_SCRIPTS}/build-client-sdeb ubuntu:jammy"
                 stash includes: 'results/source_deb/*', name: 'debs'
                 uploadDEB()
             }
         }
         stage('Build client binary debs') {
             parallel {
-                stage('Build client binary deb Bullseye') {
+                stage('Build client binary deb Trixie') {
                     steps {
-                        sh "${PATH_TO_SCRIPTS}/build-client-deb debian:bullseye"
+                        sh "${PATH_TO_SCRIPTS}/build-client-deb debian:trixie"
                     }
                 }
                 stage('Build client binary deb Bookworm') {
@@ -162,19 +186,24 @@ pipeline {
                         sh "${PATH_TO_SCRIPTS}/build-client-deb debian:bookworm"
                     }
                 }
+                stage('Build client binary deb Bullseye') {
+                    steps {
+                        sh "${PATH_TO_SCRIPTS}/build-client-deb debian:bullseye"
+                    }
+                }
                 stage('Build client binary deb Jammy') {
                     steps {
                         sh "${PATH_TO_SCRIPTS}/build-client-deb ubuntu:jammy"
                     }
                 }
-                stage('Build client binary deb Focal') {
-                    steps {
-                        sh "${PATH_TO_SCRIPTS}/build-client-deb ubuntu:focal"
-                    }
-                }
                 stage('Build client binary deb Noble') {
                     steps {
                         sh "${PATH_TO_SCRIPTS}/build-client-deb ubuntu:noble"
+                    }
+                }
+                stage('Build client binary deb Resolute') {
+                    steps {
+                        sh "${PATH_TO_SCRIPTS}/build-client-deb ubuntu:resolute"
                     }
                 }
             }
@@ -192,25 +221,14 @@ pipeline {
             }
         }
         stage('Push to public repository') {
-            agent {
-                label 'master'
-            }
             steps {
                 unstash 'uploadPath'
                 script {
-                  env.UPLOAD_PATH = sh(returnStdout: true, script: "cat uploadPath").trim()
-                }
-                // Upload packages to the repo defined in `DESTINATION`
-                // sync2ProdPMMClient(DESTINATION, 'yes')
-                sync2ProdPMMClientRepo(DESTINATION, env.UPLOAD_PATH, 'pmm3-client')
-                withCredentials([sshUserPrivateKey(credentialsId: 'repo.ci.percona.com', keyFileVariable: 'KEY_PATH', usernameVariable: 'USER')]) {
-                    script {
-                        sh '''
-                            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${KEY_PATH} ${USER}@repo.ci.percona.com "
-                                scp -P 2222 -o ConnectTimeout=1 -o StrictHostKeyChecking=no ${UPLOAD_PATH}/binary/tarball/*.tar.gz jenkins@jenkins-deploy.jenkins-deploy.web.r.int.percona.com:/data/downloads/TESTING/pmm-arm/
-                            "
-                        '''
-                    }
+                    env.UPLOAD_PATH = sh(returnStdout: true, script: "cat uploadPath").trim()
+                    build job: 'pmm3-client-repo-push', parameters: [
+                        string(name: 'DESTINATION', value: params.DESTINATION),
+                        string(name: 'UPLOAD_PATH', value: env.UPLOAD_PATH)
+                    ]
                 }
             }
         }

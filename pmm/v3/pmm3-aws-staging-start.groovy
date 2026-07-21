@@ -3,11 +3,6 @@ import hudson.slaves.*
 import jenkins.model.Jenkins
 import hudson.plugins.sshslaves.SSHLauncher
 
-library changelog: false, identifier: 'lib@master', retriever: modernSCM([
-    $class: 'GitSCMSource',
-    remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
-]) _
-
 library changelog: false, identifier: 'v3lib@master', retriever: modernSCM(
   scm: [$class: 'GitSCMSource', remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'],
   libraryPath: 'pmm/v3/'
@@ -15,7 +10,7 @@ library changelog: false, identifier: 'v3lib@master', retriever: modernSCM(
 
 pipeline {
     agent {
-        label 'agent-amd64-ol9'
+        label 'agent-amd64'
     }
     parameters {
         string(
@@ -55,41 +50,45 @@ pipeline {
         )
         choice(
             choices: '1\n0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30',
-            description: 'Stop the instance after, days ("0" value disables autostop and recreates instance in case of AWS failure)',
+            description: 'Stop the instance in X days ("0" value disables the automated instance removal)',
             name: 'DAYS'
         )
         text(
-            defaultValue: '-e PMM_DEBUG=1 -e PMM_ENABLE_TELEMETRY=0 -e PMM_DEV_PERCONA_PLATFORM_PUBLIC_KEY=RWTg+ZmCCjt7O8eWeAmTLAqW+1ozUbpRSKSwNTmO+exlS5KEIPYWuYdX -e PMM_DEV_PERCONA_PLATFORM_ADDRESS=https://check-dev.percona.com',
+            defaultValue: '-e PMM_DEBUG=1 -e PMM_ENABLE_TELEMETRY=0',
             description: '''
-            Passing environment variables to PMM Server Docker container is supported for PMM v2 and up.
+            Pass environment variables to PMM Server Docker container.
             Example: -e PMM_DEV_TELEMETRY_DISABLE_START_DELAY=1 -e PMM_DEBUG=1
             ''',
             name: 'DOCKER_ENV_VARIABLE'
         )
         choice(
-            choices: ['8.0','5.7'],
+            choices: ['8.4', '8.0','5.7'],
             description: 'Percona XtraDB Cluster version',
             name: 'PXC_VERSION')
         choice(
-            choices: ['8.0', '5.7', '5.7.30', '5.6'],
+            choices: ['8.0', '8.4', '5.7', '5.7.30', '5.6'],
             description: "Percona Server for MySQL version",
             name: 'PS_VERSION')
         choice(
-            choices: ['8.0', '5.7', '5.6'],
+            choices: ['8.0', '8.4', '5.7', '5.6'],
             description: 'MySQL Community Server version',
             name: 'MS_VERSION')
         choice(
-            choices: ['16', '17', '15','14', '13'],
+            choices: ['16', '17', '18', '15','14', '13'],
             description: "Which version of PostgreSQL",
             name: 'PGSQL_VERSION')
         choice(
-            choices: ['16', '17', '15', '14', '13'],
+            choices: ['16', '17', '18', '15', '14', '13'],
             description: 'Percona Distribution for PostgreSQL',
             name: 'PDPGSQL_VERSION')
         choice(
-            choices: ['8.0.1-1', '7.0.7-4', '6.0.14-11', '5.0.26-22', '4.4.29-28'],
+            choices: ['8.0', '7.0', '6.0', '5.0', '4.4'],
             description: "Percona Server for MongoDB version",
             name: 'PSMDB_VERSION')
+        choice(
+            choices: ['8.0', '7.0', '6.0', '5.0', '4.4'],
+            description: "Official MongoDB version",
+            name: 'MODB_VERSION')
         text(
             defaultValue: '--database ps=5.7,QUERY_SOURCE=perfschema',
             description: '''
@@ -97,11 +96,12 @@ pipeline {
             --database ps - Percona Server for MySQL (ex: --database ps=5.7,QUERY_SOURCE=perfschema)
             Additional options:
                 QUERY_SOURCE=perfschema|slowlog
-                SETUP_TYPE=replica(Replication)|gr(Group Replication)|(single node if no option passed)
+                SETUP_TYPE=replication(Replication)|gr(Group Replication)|(single node if no option passed)
             --database mysql - Official MySQL (ex: --database mysql,QUERY_SOURCE=perfschema)
             Additional options:
                 QUERY_SOURCE=perfschema|slowlog
             --database psmdb - Percona Server for MongoDB (ex: --database psmdb=latest,SETUP_TYPE=pss)
+            --database modb - Official MongoDB
             Additional options:
                 SETUP_TYPE=pss(Primary-Secondary-Secondary)|psa(Primary-Secondary-Arbiter)|shards(Sharded cluster)
             --database pdpgsql - Percona Distribution for PostgreSQL (ex: --database pdpgsql=16)
@@ -128,17 +128,14 @@ pipeline {
             name: 'SERVER_IP'
         )
         string(
-            defaultValue: 'v3',
-            description: 'Tag/Branch for qa-integration repository',
+            defaultValue: 'main',
+            description: 'Tag/Branch for pmm-qa repository',
             name: 'PMM_QA_GIT_BRANCH'
         )
     }
     options {
         buildDiscarder(logRotator(numToKeepStr: '30'))
         skipDefaultCheckout()
-    }
-    environment {
-        DEFAULT_SSH_KEYS = getSHHKeysPMM()
     }
     stages {
         stage('Prepare') {
@@ -156,12 +153,14 @@ pipeline {
                         PS_VERSION:      ${PS_VERSION}
                         MS_VERSION:      ${MS_VERSION}
                         MO_VERSION:      ${PSMDB_VERSION}
+                        MODB_VERSION:    ${MODB_VERSION}
                         PGSQL_VERSION:   ${PGSQL_VERSION}
                         PDPGSQL_VERSION: ${PDPGSQL_VERSION}
                         OWNER:           ${OWNER}
                         VM_NAME:         ${VM_NAME}
                     """
                     env.ADMIN_PASSWORD = params.ADMIN_PASSWORD
+                    env.DEFAULT_SSH_KEYS = getSSHKeys()
                     if (params.NOTIFY == "true") {
                         slackSend botUser: true, channel: '#pmm-notifications', color: '#0000FF', message: "[${JOB_NAME}]: build started, owner: @${OWNER}, URL: ${BUILD_URL}"
                         if (env.OWNER_SLACK) {
@@ -174,8 +173,8 @@ pipeline {
 
         stage('Run VM') {
             steps {
-                // This sets envvars: SPOT_PRICE, REQUEST_ID, IP, ID (AMI_ID)
-                launchSpotInstance('t3.large', 'FAIR', 30)
+                // This sets envvars: SPOT_PRICE, REQUEST_ID, IP, AMI_ID
+                runSpotInstance('t3.xlarge')
 
                 withCredentials([sshUserPrivateKey(credentialsId: 'aws-jenkins', keyFileVariable: 'KEY_PATH', passphraseVariable: '', usernameVariable: 'USER')]) {
                     sh '''
@@ -201,11 +200,9 @@ pipeline {
                             echo "${SSH_KEY}" >> /home/ec2-user/.ssh/authorized_keys
                         fi
 
-                        sudo yum -y install https://repo.percona.com/yum/percona-release-latest.noarch.rpm
+                        curl -O https://repo.percona.com/yum/percona-release-latest.noarch.rpm
+                        sudo dnf -y install ./percona-release-latest.noarch.rpm
                         sudo rpm --import /etc/pki/rpm-gpg/PERCONA-PACKAGING-KEY
-                        sudo yum repolist
-                        sudo yum install ansible -y
-                        sudo yum install sysbench mysql -y
                     '''
                 }
             }
@@ -219,6 +216,7 @@ pipeline {
                     withEnv(['JENKINS_NODE_COOKIE=dontKillMe']) {
                         node(env.VM_NAME){
                             withCredentials([aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'AMI/OVF', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                              try {
                                 sh '''
                                     set -o errexit
                                     set -o xtrace
@@ -229,35 +227,49 @@ pipeline {
                                     docker volume create pmm-data
 
                                     docker run --detach --restart always \
-                                        --network="pmm-qa" \
+                                        --network pmm-qa \
+                                        --name watchtower \
+                                        --volume /var/run/docker.sock:/var/run/docker.sock \
+                                        --restart always \
                                         -e WATCHTOWER_DEBUG=1 \
                                         -e WATCHTOWER_HTTP_API_TOKEN=testToken \
                                         -e WATCHTOWER_HTTP_API_UPDATE=1 \
-                                        --volume /var/run/docker.sock:/var/run/docker.sock \
-                                        --name watchtower \
                                         ${WATCHTOWER_VERSION}
 
                                     docker run -d \
-                                        -p 80:8080 \
                                         -p 443:8443 \
-                                        -p 9000:9000 \
-                                        --volume pmm-data:/srv \
+                                        -p 4647:4647 \
                                         --name pmm-server \
                                         --hostname pmm-server \
-                                        --network pmm-qa \
                                         --restart always \
+                                        --network pmm-qa \
+                                        --volume pmm-data:/srv \
                                         -e PMM_WATCHTOWER_HOST=http://watchtower:8080 \
                                         -e PMM_WATCHTOWER_TOKEN=testToken \
+                                        -e GF_SECURITY_ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
                                         ${DOCKER_ENV_VARIABLE} \
                                         ${DOCKER_VERSION}
 
-                                    sleep 10
-                                    docker logs pmm-server
-
-                                    if [ ${ADMIN_PASSWORD} != admin ]; then
-                                        docker exec pmm-server change-admin-password ${ADMIN_PASSWORD}
+                                    if ! timeout 100 bash -c 'until [ "$(curl -ks -o /dev/null -w "%{http_code}" https://127.0.0.1/v1/server/readyz)" = "200" ]; do sleep 5; done'; then
+                                        echo "PMM Server did not become ready within the timeout, dumping logs" >&2
+                                        docker logs pmm-server || true
+                                        mkdir -p "${WORKSPACE}/logs"
+                                        docker cp pmm-server:/srv/logs/. "${WORKSPACE}/logs/" || true
+                                        exit 1
                                     fi
+                                    pmm_tag="${DOCKER_VERSION##*:}"
+                                    minor_version=${pmm_tag#3.}
+                                    minor_version=${minor_version%%.*}
+                                    if [ "${pmm_tag}" != "${pmm_tag#3.}" ] && [ "${minor_version}" -lt 8 ]; then
+                                        docker exec pmm-server change-admin-password "${ADMIN_PASSWORD}"
+                                    fi
+                                    docker logs pmm-server
                                 '''
+                              } finally {
+                                  if (fileExists('logs')) {
+                                      archiveArtifacts artifacts: 'logs/**', allowEmptyArchive: true
+                                  }
+                              }
                             }
                         }
                     }
@@ -267,8 +279,8 @@ pipeline {
         stage('Run Clients') {
             steps {
                 node(env.VM_NAME){
-                setupPMM3Client(SERVER_IP, CLIENT_VERSION.trim(), DOCKER_VERSION, ENABLE_PULL_MODE, 'no', CLIENT_INSTANCE, 'aws-staging', ADMIN_PASSWORD, 'no')
-                script {
+                    setupPMM3Client(SERVER_IP, CLIENT_VERSION.trim(), DOCKER_VERSION, ENABLE_PULL_MODE, 'no', CLIENT_INSTANCE, 'aws-staging', ADMIN_PASSWORD, 'no')
+                    script {
                         env.PMM_REPO = params.CLIENT_VERSION == "pmm3-rc" ? "testing" : "experimental"
                     }
 
@@ -280,6 +292,7 @@ pipeline {
 
                         export PATH=$PATH:/usr/sbin
                         export PMM_CLIENT_VERSION=${CLIENT_VERSION}
+                        mkdir -m 777 -p /tmp/backup_data
                         if [ "${CLIENT_VERSION}" = 3-dev-latest ]; then
                             export PMM_CLIENT_VERSION="latest"
                         fi
@@ -290,14 +303,15 @@ pipeline {
 
                         docker network create pmm-qa || true
 
-                        sudo mkdir -p /srv/qa-integration || :
-                        pushd /srv/qa-integration
-                            sudo git clone --single-branch --branch ${PMM_QA_GIT_BRANCH} https://github.com/Percona-Lab/qa-integration.git .
+                        sudo rm -rf /srv/pmm-qa
+                        sudo mkdir -p /srv/pmm-qa
+                        pushd /srv/pmm-qa
+                            sudo git clone --single-branch --branch ${PMM_QA_GIT_BRANCH} https://github.com/percona/pmm-qa.git .
                         popd
 
-                        sudo chown ec2-user -R /srv/qa-integration
+                        sudo chown ec2-user -R /srv/pmm-qa
 
-                        pushd /srv/qa-integration/pmm_qa
+                        pushd /srv/pmm-qa/qa-integration/pmm_qa
                             echo "Setting docker based PMM clients"
                             python3 -m venv virtenv
                             . virtenv/bin/activate
@@ -336,13 +350,12 @@ pipeline {
             }
         }
         failure {
-            withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'pmm-staging-slave', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+            withCredentials([aws(credentialsId: 'pmm-staging-slave')]) {
                 sh '''
                     set -o xtrace
-                    REQUEST_ID=$(cat REQUEST_ID)
-                    if [ -n "$REQUEST_ID" ]; then
-                        aws ec2 --region us-east-2 cancel-spot-instance-requests --spot-instance-request-ids $REQUEST_ID
-                        aws ec2 --region us-east-2 terminate-instances --instance-ids $(cat ID)
+                    if [ -n "${REQUEST_ID}" ]; then
+                        aws ec2 --region us-east-2 cancel-spot-instance-requests --spot-instance-request-ids ${REQUEST_ID}
+                        aws ec2 --region us-east-2 terminate-instances --instance-ids ${AMI_ID}
                     fi
                 '''
             }

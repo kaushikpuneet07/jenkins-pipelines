@@ -4,23 +4,28 @@ library changelog: false, identifier: 'lib@master', retriever: modernSCM([
 ]) _
 
 List all_nodes = [
+    'ubuntu-resolute',
     'ubuntu-noble',
-    'ubuntu-focal',
     'ubuntu-jammy',
     'debian-11',
     'debian-12',
-    'centos-7',
+    'debian-13',
     'oracle-8',
     'oracle-9',
     'rhel-8',
     'rhel-9',
+    'rhel-10',
+    'al-2023',
     'rhel-8-arm',
     'rhel-9-arm',
+    'rhel-10-arm',
+    'al-2023-arm',
     'debian-11-arm',
     'debian-12-arm',
-    'ubuntu-focal-arm',
+    'debian-13-arm',
     'ubuntu-jammy-arm',
-    'ubuntu-noble-arm'
+    'ubuntu-noble-arm',
+    'ubuntu-resolute-arm'
 ]
 
 List TEST_DISTS = []
@@ -52,7 +57,7 @@ pipeline {
     }
     parameters {
         choice(
-            choices: ['PS80','PS84','PS_LTS_INN'],
+            choices: ['PS97','PS80','PS84','PS_LTS_INN'],
             description: 'Product for which the packages will be tested',
             name: 'PRODUCT_TO_TEST'
         )
@@ -60,23 +65,28 @@ pipeline {
             name: 'TEST_DIST',
             choices: [
                 'all',
+                'ubuntu-resolute',
                 'ubuntu-noble',
-                'ubuntu-focal',
                 'ubuntu-jammy',
                 'debian-11',
                 'debian-12',
-                'centos-7',
+                'debian-13',
                 'oracle-8',
                 'oracle-9',
                 'rhel-8',
                 'rhel-9',
+                'rhel-10',
+                'al-2023', 
                 'rhel-8-arm',
                 'rhel-9-arm',
+                'rhel-10-arm',
+                'al-2023-arm',
                 'debian-11-arm',
                 'debian-12-arm',
-                'ubuntu-focal-arm',
+                'debian-13-arm',
                 'ubuntu-jammy-arm',
-                'ubuntu-noble-arm'
+                'ubuntu-noble-arm',
+                'ubuntu-resolute-arm',
             ],
             description: 'Distribution to run test'
         )
@@ -89,42 +99,48 @@ pipeline {
             ],
             description: 'Repo to install packages from'
         )
+        string(
+            name: 'git_repo',
+            defaultValue: "Percona-QA/package-testing",
+            description: 'Git repository to use for testing'
+        )
+        string(
+            name: 'BRANCH',
+            defaultValue: 'master',
+            description: 'Git branch to use for testing'
+        )
     }
     stages {
         stage('SET UPSTREAM_VERSION,PS_VERSION and PS_REVISION') {
             steps {
                 script {
                     echo "PRODUCT_TO_TEST is: ${env.PRODUCT_TO_TEST}"
-                    sh '''
-                        rm -rf /package-testing
-                        rm -f master.zip
-                        wget https://github.com/Percona-QA/package-testing/archive/master.zip
-                        unzip master.zip
-                        rm -f master.zip
-                        mv "package-testing-master" package-testing
-                        echo "Contents of package-testing directory:"
-                        ls -l package-testing
-                        echo "Contents of VERSIONS file:"
-                        cat package-testing/VERSIONS
-                    '''
                     
+                    sh """
+                        echo "BRANCH is: \${BRANCH}"
+                        echo "git_repo is: \${git_repo}"
+                        rm -rf /tmp/package-testing
+                        mkdir /tmp/package-testing
+                        wget -O /tmp/package-testing/VERSIONS https://raw.githubusercontent.com/\${git_repo}/refs/heads/\${BRANCH}/VERSIONS
+                    """
+
                     def UPSTREAM_VERSION = sh(
                         script: ''' 
-                            grep ${PRODUCT_TO_TEST}_VER package-testing/VERSIONS | awk -F= '{print \$2}' | sed 's/"//g' | awk -F- '{print \$1}'
+                            grep ${PRODUCT_TO_TEST}_VER /tmp/package-testing/VERSIONS | awk -F= '{print \$2}' | sed 's/"//g' | awk -F- '{print \$1}'
                          ''',
                         returnStdout: true
                         ).trim()
 
                     def PS_VERSION = sh(
                         script: ''' 
-                            grep ${PRODUCT_TO_TEST}_VER package-testing/VERSIONS | awk -F= '{print \$2}' | sed 's/"//g' | awk -F- '{print \$2}'
+                            grep ${PRODUCT_TO_TEST}_VER /tmp/package-testing/VERSIONS | awk -F= '{print \$2}' | sed 's/"//g' | awk -F- '{print \$2}'
                         ''',
                         returnStdout: true
                         ).trim()
 
                     def PS_REVISION = sh(
                         script: '''
-                             grep ${PRODUCT_TO_TEST}_REV package-testing/VERSIONS | awk -F= '{print \$2}' | sed 's/"//g' 
+                             grep ${PRODUCT_TO_TEST}_REV /tmp/package-testing/VERSIONS | awk -F= '{print \$2}' | sed 's/"//g' 
                         ''',
                         returnStdout: true
                         ).trim()
@@ -162,6 +178,18 @@ pipeline {
 
         stage("Run parallel") {
             parallel {
+
+                stage("Ubuntu Resolute") {
+                    when {
+                        expression {
+                            TEST_DISTS.contains("ubuntu-resolute")
+                        }
+                    }
+
+                    steps {
+                        runNodeBuild("ubuntu-resolute")
+                    }
+                }
            
                 stage("Ubuntu Noble") {
                     when {
@@ -175,18 +203,6 @@ pipeline {
                     }
                 }
 
-                stage("Ubuntu Focal") {
-                    when {
-                        expression {
-                            TEST_DISTS.contains("ubuntu-focal")
-                        }
-                    }
-
-                    steps {
-                        runNodeBuild("ubuntu-focal")
-                    }
-                }
-
                 stage("Ubuntu Jammy") {
                     when {
                         expression {
@@ -196,6 +212,18 @@ pipeline {
 
                     steps {
                         runNodeBuild("ubuntu-jammy")
+                    }
+                }
+
+                stage("Ubuntu Resolute ARM") {
+                    when {
+                        expression {
+                            TEST_DISTS.contains("ubuntu-resolute-arm")
+                        }
+                    }
+
+                    steps {
+                        runNodeBuild("ubuntu-resolute-arm")
                     }
                 }
 
@@ -220,18 +248,6 @@ pipeline {
 
                     steps {
                         runNodeBuild("ubuntu-jammy-arm")
-                    }
-                }
-
-                stage("Ubuntu Focal ARM") {
-                    when {
-                        expression {
-                            TEST_DISTS.contains("ubuntu-focal-arm")
-                        }
-                    }
-
-                    steps {
-                        runNodeBuild("ubuntu-focal-arm")
                     }
                 }
 
@@ -283,15 +299,27 @@ pipeline {
                     }
                 }
 
-                stage("Centos 7") {
+                stage("Debian Trixie") {
                     when {
                         expression {
-                            TEST_DISTS.contains("centos-7")
+                            TEST_DISTS.contains("debian-13")
                         }
                     }
 
                     steps {
-                        runNodeBuild("centos-7")
+                        runNodeBuild("debian-13")
+                    }
+                }
+
+                stage("Debian Trixie-arm") {
+                    when {
+                        expression {
+                            TEST_DISTS.contains("debian-13-arm")
+                        }
+                    }
+
+                    steps {
+                        runNodeBuild("debian-13-arm")
                     }
                 }
 
@@ -371,6 +399,59 @@ pipeline {
 
                     }
                 }
+
+                stage("Rhel-10") {
+                    when {
+                        expression {
+                            TEST_DISTS.contains("rhel-10")
+                        }
+                    }
+
+                    steps {
+                        runNodeBuild("rhel-10")
+
+                    }
+                }
+
+                stage("Rhel-10-arm") {
+                    when {
+                        expression {
+                            TEST_DISTS.contains("rhel-10-arm")
+                        }
+                    }
+
+                    steps {
+                        runNodeBuild("rhel-10-arm")
+
+                    }
+                }
+
+                stage("AmazonLinux-2023") {
+                    when {
+                        expression {
+                            TEST_DISTS.contains("al-2023")
+                        }
+                    }
+
+                    steps {
+                        runNodeBuild("al-2023")
+
+                    }
+                }
+
+                stage("AmazonLinux-2023-arm") {
+                    when {
+                        expression {
+                            TEST_DISTS.contains("al-2023-arm")
+                        }
+                    }
+
+                    steps {
+                        runNodeBuild("al-2023-arm")
+
+                    }
+                }  
+
             }
         }
     }

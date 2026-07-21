@@ -7,8 +7,12 @@
     disabled: false
     concurrent: true
     auth-token: xbparam24
-    node: micro-amazon
+    node: launcher-x64
     properties:
+    - groovy-label:
+        script: |
+            return (CLOUD == 'AWS') ? 'micro-amazon' : 'launcher-x64'
+        sandbox: true
     - build-discarder:
         days-to-keep: -1
         num-to-keep: 30
@@ -48,11 +52,11 @@
         default: true
         description: "Run kmip tests"
     - choice:
-        name: LABEL
+        name: CLOUD
         choices:
-        - docker-32gb
-        - docker
-        description: Run build on specified instance type. 
+        - "Hetzner"
+        - "AWS"
+        description: "Host provider for Jenkins workers"
     axes:
     - axis:
         name: CMAKE_BUILD_TYPE
@@ -64,14 +68,13 @@
         type: user-defined
         name: DOCKER_OS
         values:
-        - centos:7
         - centos:8
         - oraclelinux:9
-        - ubuntu:bionic
         - ubuntu:focal
         - ubuntu:jammy
-        - debian:buster
+        - ubuntu:noble
         - debian:bullseye
+        - debian:bookworm
         - asan
     - axis:
         name: XTRABACKUP_TARGET
@@ -84,9 +87,10 @@
       - project: percona-xtrabackup-8.0-test-pipeline
         current-parameters: true
         predefined-parameters: |
-          DOCKER_OS=$DOCKER_OS
-          CMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE
-          XTRABACKUP_TARGET=$XTRABACKUP_TARGET
+          DOCKER_OS=${{DOCKER_OS}}
+          CMAKE_BUILD_TYPE=${{CMAKE_BUILD_TYPE}}
+          XTRABACKUP_TARGET=${{XTRABACKUP_TARGET}}
+          CLOUD=${{CLOUD}}
         block: true
         block-thresholds:
           build-step-failure-threshold: FAILURE
@@ -97,10 +101,10 @@
     - copyartifact:
         project: percona-xtrabackup-8.0-test-pipeline
         which-build: specific-build
-        build-number: "${TRIGGERED_BUILD_NUMBERS_percona_xtrabackup_8_0_test_pipeline}"
+        build-number: "${{TRIGGERED_BUILD_NUMBERS_percona_xtrabackup_8_0_test_pipeline}}"
         do-not-fingerprint: true
     - shell: |
-        echo "${TRIGGERED_BUILD_NUMBERS_percona_xtrabackup_8_0_test_pipeline}" > PIPELINE_BUILD_NUMBER
+        echo "${{TRIGGERED_BUILD_NUMBERS_percona_xtrabackup_8_0_test_pipeline}}" > PIPELINE_BUILD_NUMBER
     publishers:
     - junit:
         results: "**/junit.xml"

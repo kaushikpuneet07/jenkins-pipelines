@@ -74,7 +74,7 @@ void checkUpgrade(String PMM_VERSION, String PRE_POST) {
     withCredentials([sshUserPrivateKey(credentialsId: 'aws-jenkins-admin', keyFileVariable: 'KEY_PATH', passphraseVariable: '', usernameVariable: 'USER')]) {
         sh """
             ssh -i "${KEY_PATH}" -o ConnectTimeout=1 -o StrictHostKeyChecking=no admin@${VM_IP} '
-                sudo yum install -y python3
+                sudo dnf install -y python3
                 export PMM_VERSION=${PMM_VERSION}
                 sudo chmod 755 /srv/pmm-qa/pmm-tests/check_upgrade.py
                 python3 /srv/pmm-qa/pmm-tests/check_upgrade.py --env=ami --pre_post=${PRE_POST} --version=${PMM_VERSION}
@@ -89,9 +89,9 @@ void checkClientAfterUpgrade(String PMM_VERSION) {
             ssh -i "${KEY_PATH}" -o ConnectTimeout=1 -o StrictHostKeyChecking=no ${USER}@${VM_CLIENT_IP_DB} '
                 export PMM_VERSION=${PMM_VERSION}
                 echo "Upgrading pmm-client";
-                sudo yum clean all
-                sudo yum makecache
-                sudo yum -y install pmm-client
+                sudo dnf clean all
+                sudo dnf makecache
+                sudo dnf -y install pmm-client
                 sleep 20
                 sudo chmod 755 /srv/pmm-qa/pmm-tests/check_client_upgrade.sh
                 bash -xe /srv/pmm-qa/pmm-tests/check_client_upgrade.sh ${PMM_VERSION}
@@ -135,7 +135,7 @@ currentBuild.description = "AMI: $amiID"
 
 pipeline {
     agent {
-        label 'agent-amd64-ol9'
+        label 'agent-amd64'
     }
     environment {
         REMOTE_AWS_MYSQL_USER=credentials('pmm-dev-mysql-remote-user')
@@ -171,10 +171,6 @@ pipeline {
     }
     parameters {
         string(
-            defaultValue: 'v3',
-            description: 'Tag/Branch for UI Tests Repo repository',
-            name: 'GIT_BRANCH')
-        string(
             defaultValue: '',
             description: 'PMM Server AMI ID',
             name: 'AMI_ID_CUSTOM')
@@ -191,7 +187,7 @@ pipeline {
             description: 'latest PMM Server Version',
             name: 'PMM_SERVER_LATEST')
         string(
-            defaultValue: 'v3',
+            defaultValue: 'main',
             description: 'Tag/Branch for pmm-qa repository',
             name: 'PMM_QA_GIT_BRANCH')
         choice(
@@ -209,23 +205,20 @@ pipeline {
     stages {
         stage('Prepare') {
             steps {
-                // fetch pmm-ui-tests repository
                 git poll: false,
-                    branch: GIT_BRANCH,
-                    url: 'https://github.com/percona/pmm-ui-tests.git'
+                    branch: PMM_QA_GIT_BRANCH,
+                    url: 'https://github.com/percona/pmm-qa.git'
 
                 slackSend channel: '#pmm-notifications',
                           color: '#0000FF',
                           message: "[${JOB_NAME}]: build started - ${BUILD_URL}"
                 sh '''
-                    sudo mkdir -p /srv/pmm-qa || :
-                    pushd /srv/pmm-qa
-                        sudo git clone --single-branch --branch \${PMM_QA_GIT_BRANCH} https://github.com/percona/pmm-qa.git .
-                        sudo git checkout \${PMM_QA_GIT_COMMIT_HASH}
-                        sudo curl -O https://raw.githubusercontent.com/Percona-QA/percona-qa/master/get_download_link.sh
-                        sudo chmod 755 get_download_link.sh
-                    popd
-                    sudo ln -s /usr/bin/chromium-browser /usr/bin/chromium
+                    sudo rm -rf /srv/pmm-qa
+                    sudo mkdir -p /srv/pmm-qa
+                    sudo rsync -a ${env.WORKSPACE}/ /srv/pmm-qa/
+                    sudo curl -o /srv/pmm-qa/get_download_link.sh https://raw.githubusercontent.com/Percona-QA/percona-qa/master/get_download_link.sh
+                    sudo chmod 755 /srv/pmm-qa/get_download_link.sh
+                    sudo ln -sf /usr/bin/chromium-browser /usr/bin/chromium
                 '''
             }
         }
@@ -246,7 +239,7 @@ pipeline {
                     while true; do
                         set -x
                         # we only want to see the http code to improve troubleshooting
-                        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 ${PMM_URL}/ping)
+                        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 ${PMM_URL}/v1/server/readyz)
                         set +x
 
                         if [[ $HTTP_CODE == "200" ]]; then
@@ -294,15 +287,17 @@ pipeline {
         }
         stage('Run UI Upgrade Tests') {
             steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'PMM_AWS_DEV', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
-                    sh """
-                        npm ci
-                        envsubst < env.list > env.generated.list
-                        sed -i 's+http://localhost/+${PMM_UI_URL}/+g' pr.codecept.js
-                        export PWD=\$(pwd);
-                        export CHROMIUM_PATH=/usr/bin/chromium
-                        ./node_modules/.bin/codeceptjs run --reporter mocha-multi -c pr.codecept.js --grep '@ami-upgrade'
-                    """
+                dir('codeceptjs-e2e') {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'PMM_AWS_DEV', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+                        sh '''
+                            npm ci
+                            envsubst < env.list > env.generated.list
+                            sed -i 's+http://localhost/+${env.PMM_UI_URL}/+g' pr.codecept.js
+                            export PWD=\$(pwd);
+                            export CHROMIUM_PATH=/usr/bin/chromium
+                            ./node_modules/.bin/codeceptjs run --reporter mocha-multi -c pr.codecept.js --grep '@ami-upgrade'
+                        '''
+                    }
                 }
             }
         }
@@ -314,12 +309,14 @@ pipeline {
         stage('Check Client Upgrade') {
             steps {
                 checkClientAfterUpgrade(PMM_SERVER_LATEST);
-                sh """
-                    export PWD=\$(pwd);
-                    export CHROMIUM_PATH=/usr/bin/chromium
-                    sleep 30
-                    ./node_modules/.bin/codeceptjs run --reporter mocha-multi -c pr.codecept.js --grep '(?=.*@post-client-upgrade)(?=.*@ami-upgrade)'
-                """
+                dir('codeceptjs-e2e') {
+                    sh '''
+                        export PWD=\$(pwd);
+                        export CHROMIUM_PATH=/usr/bin/chromium
+                        sleep 30
+                        ./node_modules/.bin/codeceptjs run --reporter mocha-multi -c pr.codecept.js --grep '(?=.*@post-client-upgrade)(?=.*@ami-upgrade)'
+                    '''
+                }
             }
         }
     }
@@ -349,16 +346,16 @@ pipeline {
             }
             script {
                 if (currentBuild.result == null || currentBuild.result == 'SUCCESS') {
-                    junit 'tests/output/*.xml'
+                    junit 'codeceptjs-e2e/tests/output/*.xml'
                     slackSend channel: '#pmm-notifications', color: '#00FF00', message: "[${JOB_NAME}]: build finished - ${BUILD_URL} "
                     archiveArtifacts artifacts: 'logs.zip'
                     archiveArtifacts artifacts: 'pmm-agent.log'
                 } else {
-                    junit 'tests/output/*.xml'
+                    junit 'codeceptjs-e2e/tests/output/*.xml'
                     slackSend channel: '#pmm-notifications', color: '#FF0000', message: "[${JOB_NAME}]: build ${currentBuild.result} - ${BUILD_URL}"
                     archiveArtifacts artifacts: 'logs.zip'
                     archiveArtifacts artifacts: 'pmm-agent.log'
-                    archiveArtifacts artifacts: 'tests/output/*.png'
+                    archiveArtifacts artifacts: 'codeceptjs-e2e/tests/output/*.png'
                 }
             }
             /*

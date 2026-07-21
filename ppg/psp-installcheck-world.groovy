@@ -4,20 +4,25 @@ library changelog: false, identifier: "lib@master", retriever: modernSCM([
 ])
 
 pipeline {
-  agent {
-  label 'min-ol-9-x64'
-  }
+    agent {
+        label 'min-ol-9-x64'
+    }
 
-  parameters {
+    parameters {
         choice(
             name: 'PLATFORM',
             description: 'For which platform (OS) you want to test?',
             choices: ppgOperatingSystemsALL()
         )
         string(
-            defaultValue: 'ppg-17.0',
-            description: 'Server PG version for test, including major and minor version, e.g ppg-16.2, ppg-15.5',
+            defaultValue: '18.4',
+            description: 'Server PG version for test, including major and minor version, e.g 17.4, 17.3',
             name: 'VERSION'
+        )
+        string(
+            defaultValue: '18.4.1',
+            description: 'Server PG version for test, including major and minor version, e.g 17.6.1',
+            name: 'PERCONA_SERVER_VERSION'
         )
         string(
             defaultValue: 'https://github.com/percona/postgres',
@@ -25,7 +30,7 @@ pipeline {
             name: 'PSP_REPO'
         )
         string(
-            defaultValue: 'TDE_REL_17_STABLE',
+            defaultValue: 'PSP_REL_18_STABLE',
             description: 'PSP repo version/branch/tag to use; e.g main, TDE_REL_17_STABLE',
             name: 'PSP_BRANCH'
         )
@@ -38,103 +43,112 @@ pipeline {
             name: 'TESTSUITE',
             description: 'Testsuite to run',
             choices: [
-                'installcheck',
+                'check-server',
+                'check-tde',
                 'installcheck-world'
             ]
         )
         choice(
-            name: 'ACCESS_METHOD',
-            description: 'Server access method to use',
+            name: 'IO_METHOD',
+            description: 'io_method to use for the server (applicable to pg-18 and onwards only).',
             choices: [
-                'heap',
-                'tde_heap',
-                'tde_heap_basic'
+                'sync',
+                'worker',
+                'io_uring'
             ]
         )
-        booleanParam(
-            name: 'WITH_TDE_HEAP',
-            description: "Do you want TDE_HEAP build and test as part of this run?"
-        )
-        booleanParam(
-            name: 'CHANGE_TDE_BRANCH',
-            description: "Do you want to change TDE branch to other than default one given in PSP? It will only work if WITH_TDE_HEAP option is enabled."
+        string(
+            defaultValue: 'https://github.com/percona/pg_tde.git',
+            description: 'In case you want to test a different pg_tde repository than the default one.',
+            name: 'TDE_REPO'
         )
         string(
             defaultValue: 'main',
-            description: 'pg_tde branch to use. It will only work if both options, WITH_TDE_HEAP and CHANGE_TDE_BRANCH, are enabled.',
+            description: 'Branch for pg_tde repository. Would only be used with check-tde, check-all and installcheck-world testsuites.',
             name: 'TDE_BRANCH'
         )
-        string(
-            defaultValue: 'yes',
-            description: 'Destroy VM after tests',
-            name: 'DESTROY_ENV'
+        booleanParam(
+            name: 'DESTROY_ENV',
+            defaultValue: true,
+            description: 'Destroy VM after tests'
         )
-  }
-  environment {
-      PATH = '/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/home/ec2-user/.local/bin';
-      MOLECULE_DIR = "psp/server_tests";
-  }
-  options {
-          withCredentials(moleculeDistributionJenkinsCreds())
-          disableConcurrentBuilds()
-  }
-  stages {
-    stage('Set build name'){
-      steps {
+    }
+    environment {
+        PATH = '/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/home/ec2-user/.local/bin'
+        MOLECULE_DIR = "psp/server_tests"
+    }
+    options {
+        withCredentials(moleculeDistributionJenkinsCreds())
+        buildDiscarder(logRotator(
+            numToKeepStr: '10',
+            artifactNumToKeepStr: '10'
+        ))
+        retry(conditions: [agent()], count: 2)
+    }
+    stages {
+        stage('Set build name') {
+            steps {
                 script {
-                    currentBuild.displayName = "${env.BUILD_NUMBER}-psp-${env.VERSION}-${env.PLATFORM}"
+                    currentBuild.displayName = "${env.BUILD_NUMBER}-psp-${env.VERSION}-${env.PLATFORM}-${env.IO_METHOD}-${env.TESTSUITE}"
                 }
             }
         }
-    stage('Checkout') {
-      steps {
-            deleteDir()
-            git poll: false, branch: TESTING_BRANCH, url: 'https://github.com/Percona-QA/ppg-testing.git'
+        stage('Checkout') {
+            steps {
+                deleteDir()
+                git poll: false, branch: TESTING_BRANCH, url: 'https://github.com/Percona-QA/ppg-testing.git'
+            }
         }
-    }
-    stage ('Prepare') {
-      steps {
-          script {
-              installMoleculePython39()
+        stage('Prepare') {
+            steps {
+                script {
+                    installMoleculePython39()
+                }
+            }
+        }
+        stage('Create virtual machines') {
+            steps {
+                script {
+                    moleculeExecuteActionWithScenarioPPG(env.MOLECULE_DIR, "create", env.PLATFORM)
+                }
+            }
+        }
+        stage('Run playbook for test') {
+            steps {
+                script {
+                    moleculeExecuteActionWithScenarioPPG(env.MOLECULE_DIR, "converge", env.PLATFORM)
+                }
+            }
+        }
+        stage('Start testinfra tests') {
+            steps {
+                script {
+                    moleculeExecuteActionWithScenarioPPG(env.MOLECULE_DIR, "verify", env.PLATFORM)
+                }
+            }
+        }
+        stage('Start Cleanup ') {
+            steps {
+                script {
+                    moleculeExecuteActionWithScenarioPPG(env.MOLECULE_DIR, "cleanup", env.PLATFORM)
+                }
             }
         }
     }
-    stage ('Create virtual machines') {
-      steps {
-          script{
-              moleculeExecuteActionWithScenario(env.MOLECULE_DIR, "create", env.PLATFORM)
+    post {
+        always {
+            script {
+                if (params.DESTROY_ENV) {
+                    echo "DESTROY_ENV is true. Cleaning up resources..."
+                    moleculeExecuteActionWithScenarioPPG(env.MOLECULE_DIR, "destroy", env.PLATFORM)
+                } else {
+                    echo "DESTROY_ENV is false. Leaving VMs active for debugging."
+                }
             }
+            archiveArtifacts(
+                artifacts: 'psp/server_tests/artifacts/**/*.tar.gz',
+                allowEmptyArchive: true
+            )
         }
     }
-    stage ('Run playbook for test') {
-      steps {
-          script{
-              moleculeExecuteActionWithScenario(env.MOLECULE_DIR, "converge", env.PLATFORM)
-            }
-        }
-    }
-    stage ('Start testinfra tests') {
-      steps {
-            script{
-              moleculeExecuteActionWithScenario(env.MOLECULE_DIR, "verify", env.PLATFORM)
-            }
-        }
-    }
-      stage ('Start Cleanup ') {
-        steps {
-             script {
-               moleculeExecuteActionWithScenario(env.MOLECULE_DIR, "cleanup", env.PLATFORM)
-            }
-        }
-    }
-  }
-  post {
-    always {
-          script {
-            if (env.DESTROY_ENV == "yes") {
-                moleculeExecuteActionWithScenario(env.MOLECULE_DIR, "destroy", env.PLATFORM)
-            }
-        }
-    }
-  }
 }

@@ -1,46 +1,58 @@
 Jenkins.instance.getItemByFullName(env.JOB_NAME).description = '''
-This job helps run an image scan with Snyk (security and best practice)
+This job helps run an image scan with Trivy
 '''
+
+library changelog: false, identifier: 'lib@master', retriever: modernSCM([
+    $class: 'GitSCMSource',
+    remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
+]) _
 
 pipeline {
     agent {
-        label 'agent-amd64-ol9'
-    }
-    environment {
-        PATH = "${WORKSPACE}/node_modules/.bin:$PATH" // Add local npm bin to PATH
-        SNYK_TOKEN=credentials('SNYK_TOKEN')
+        label params.USE_ONDEMAND ? 'agent-amd64-ondemand' : 'agent-amd64'
     }
     parameters {
         string(
-            defaultValue: 'perconalab/pmm-server',
-            description: 'Image to scan',
-            name: 'IMAGE')
+            defaultValue: 'perconalab/pmm-client:3-dev-latest',
+            description: 'PMM Client image with tag to scan',
+            name: 'PMM_CLIENT_IMAGE')
         string(
-            defaultValue: '3-dev-latest',
-            description: 'Image tag',
-            name: 'TAG')
+            defaultValue: 'perconalab/pmm-server:3-dev-latest',
+            description: 'PMM Server image with tag to scan',
+            name: 'PMM_SERVER_IMAGE')
+        booleanParam(
+            defaultValue: false,
+            description: 'Use on-demand instances instead of spot (for RC/Release builds)',
+            name: 'USE_ONDEMAND'
+        )
     }
     stages {
-        stage('Install Snyk CLI') {
+        stage('Install Trivy') {
             steps {
                 script {
-                    sh '''
-                        curl -sL https://static.snyk.io/cli/latest/snyk-linux -o snyk
-                        chmod +x snyk
-                        npm install snyk-to-html
-                    '''
+                    installTrivy(htmlTpl: true)
                 }
             }
         }
-        stage('Scan Image') {
+        stage('Scan PMM Server') {
             steps {
                 script {
-                    sh(
-                        script: "./snyk container test --severity-threshold=high --json-file-output=report.json ${params.IMAGE}:${params.TAG}",
-                        returnStatus: true
-                    )
-                    sh 'snyk-to-html -i report.json -o report.html'
-                    archiveArtifacts artifacts: 'report.html', allowEmptyArchive: true
+                    sh """
+                        trivy image --severity HIGH,CRITICAL --format table -o trivy-server-report.txt ${params.PMM_SERVER_IMAGE}
+                        trivy image --severity HIGH,CRITICAL --format template --template "@html.tpl" -o trivy-server-report.html ${params.PMM_SERVER_IMAGE}
+                    """
+                    archiveArtifacts artifacts: 'trivy-server-report.*', allowEmptyArchive: true
+                }
+            }
+        }
+        stage('Scan PMM Client') {
+            steps {
+                script {
+                    sh """
+                        trivy image --severity HIGH,CRITICAL --format table -o trivy-client-report.txt ${params.PMM_CLIENT_IMAGE}
+                        trivy image --severity HIGH,CRITICAL --format template --template "@html.tpl" -o trivy-client-report.html ${params.PMM_CLIENT_IMAGE}
+                    """
+                    archiveArtifacts artifacts: 'trivy-client-report.*', allowEmptyArchive: true
                 }
             }
         }

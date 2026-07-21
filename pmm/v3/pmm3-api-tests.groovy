@@ -5,7 +5,7 @@ library changelog: false, identifier: 'lib@master', retriever: modernSCM([
 
 pipeline {
     agent {
-        label 'agent-amd64-ol9'
+        label 'agent-amd64'
     }
     parameters {
         string(
@@ -14,7 +14,7 @@ pipeline {
             name: 'GIT_URL'
         )
         string(
-            defaultValue: 'v3',
+            defaultValue: 'main',
             description: 'Tag/Branch for pmm repository',
             name: 'GIT_BRANCH'
         )
@@ -25,36 +25,18 @@ pipeline {
         )
         string(
             defaultValue: 'perconalab/pmm-server:3-dev-latest',
-            description: 'PMM Server docker container version (image-name:version-tag)',
+            description: 'PMM Server docker image (image-name:tag)',
             name: 'DOCKER_VERSION'
-        )
-        string(
-            defaultValue: 'percona:5.7',
-            description: 'Percona Server Docker Container Image',
-            name: 'MYSQL_IMAGE'
-        )
-        string(
-            defaultValue: 'postgres:12',
-            description: 'Postgresql Docker Container Image',
-            name: 'POSTGRES_IMAGE'
-        )
-        string(
-            defaultValue: 'percona/percona-server-mongodb:4.4',
-            description: 'Percona Server MongoDb Docker Container Image',
-            name: 'MONGO_IMAGE'
         )
     }
     options {
         skipDefaultCheckout()
     }
-    triggers {
-        upstream upstreamProjects: 'pmm3-server-autobuild', threshold: hudson.model.Result.SUCCESS
-    }
     stages {
         stage('Prepare') {
             steps {
                 // fetch API tests from pmm repository
-                git poll: false, branch: GIT_BRANCH, url: GIT_URL
+                git poll: false, changelog: false, branch: GIT_BRANCH, url: GIT_URL
 
                 slackSend botUser: true,
                           channel: '#pmm-notifications',
@@ -74,7 +56,6 @@ pipeline {
                 sh 'git checkout ' + env.GIT_COMMIT_HASH
             }
         }
-
         stage('API Tests Setup') {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'hub.docker.com', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
@@ -85,25 +66,15 @@ pipeline {
                 sh '''
                     docker run -d \
                     -e PMM_DEBUG=1 \
-                    -e PMM_DEV_PERCONA_PLATFORM_ADDRESS=https://check-dev.percona.com \
-                    -e PMM_DEV_PERCONA_PLATFORM_PUBLIC_KEY=RWTg+ZmCCjt7O8eWeAmTLAqW+1ozUbpRSKSwNTmO+exlS5KEIPYWuYdX \
-                    -p 80:8080 \
                     -p 443:8443 \
                     -v ${PWD}/managed/testdata/checks:/srv/checks \
                     ${DOCKER_VERSION}
 
-                    docker build -t local/pmm-api-tests .
-                    cd api-tests
-                    docker-compose up test_db
-                    # MYSQL_IMAGE=${MYSQL_IMAGE} docker-compose up -d mysql
-                    # MONGO_IMAGE=${MONGO_IMAGE} docker-compose up -d mongo
-                    # POSTGRES_IMAGE=${POSTGRES_IMAGE} docker-compose up -d postgres
-                    # docker-compose up -d sysbench
-                    cd -
+                    docker compose -f api-tests/docker-compose.yml up test_db
+                    DOCKER_IMAGE=local/pmm-api-tests make -C api-tests docker-build-image
                 '''
                 script {
-                    env.VM_IP = "127.0.0.1"
-                    env.PMM_URL = "https://admin:admin@${env.VM_IP}"
+                    env.PMM_URL = "https://admin:admin@127.0.0.1"
                 }
             }
         }
@@ -112,7 +83,7 @@ pipeline {
                 sh '''
                     if ! timeout 100 bash -c "until curl -skf ${PMM_URL}/ping; do sleep 1; done"; then
                         echo "PMM Server did not pass the connectivity check" >&2
-                        exit 1
+                        curl -skf ${PMM_URL}/ping
                     fi
                 '''
             }
@@ -120,13 +91,12 @@ pipeline {
         stage('Run API Test') {
             steps {
                 sh '''
-                    docker run -e PMM_SERVER_URL=${PMM_URL} \
-                               -e PMM_RUN_UPDATE_TEST=0 \
-                               -e PMM_SERVER_INSECURE_TLS=1 \
-                               -e PMM_RUN_STT_TESTS=0 \
-                               --name ${BUILD_TAG} \
-                               --network host \
-                               local/pmm-api-tests
+                    DOCKER_IMAGE=local/pmm-api-tests \
+                    PMM_SERVER_URL=${PMM_URL} \
+                    PMM_SERVER_INSECURE_TLS=1 \
+                    PMM_RUN_UPDATE_TEST=0 \
+                    PMM_RUN_ADVISOR_TESTS=0 \
+                    make -C api-tests docker-run-tests
                 '''
             }
         }
@@ -134,22 +104,26 @@ pipeline {
     post {
         always {
             sh '''
-                docker cp ${BUILD_TAG}:/go/src/github.com/percona/pmm/api-tests/pmm-api-tests-junit-report.xml ./${BUILD_TAG}.xml || true
-                curl --insecure ${PMM_URL}/logs.zip --output logs.zip || true
+                if docker cp api-tests:/go/pmm/api-tests/pmm-api-tests-junit-report.xml ./api-test-results.xml; then
+                  curl --insecure ${PMM_URL}/logs.zip --output logs.zip || true
+                fi
+                docker rm -v api-tests || true
             '''
             script {
-                if (fileExists("${BUILD_TAG}.xml")) {
-                    junit testResults: "${BUILD_TAG}.xml", skipPublishingChecks: true
+                if (fileExists("api-test-results.xml")) {
+                    junit testResults: "api-test-results.xml", skipPublishingChecks: true
                 }
                 if (fileExists("logs.zip")) {
                     archiveArtifacts artifacts: 'logs.zip'
                 }
-                if (currentBuild.result != 'SUCCESS') {
-                    slackSend botUser: true,
-                              channel: '#pmm-notifications',
-                              color: '#FF0000',
-                              message: "[${JOB_NAME}]: build ${currentBuild.result}, URL: ${BUILD_URL}, owner: @${OWNER}"
-                }
+            }
+        }
+        failure {
+            script {
+                slackSend botUser: true,
+                          channel: '#pmm-notifications',
+                          color: '#FF0000',
+                          message: "[${JOB_NAME}]: build failed, URL: ${BUILD_URL}, owner: @${OWNER}"
             }
         }
         success {

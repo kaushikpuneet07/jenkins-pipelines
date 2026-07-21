@@ -16,13 +16,15 @@ def LABEL = 'docker-32gb'
 // We need this map to construct proper pxb tarball name
 OsToGlibcMap = [
     "centos:7" : "2.17",
-    "centos:8" : "2.28",
+    "oraclelinux:8" : "2.28",
     "oraclelinux:9": "2.34",
+    "oraclelinux:10": "2.39",
     "ubuntu:focal" : "2.31",
     "ubuntu:jammy" : "2.35",
     "ubuntu:noble" : "2.39",
     "debian:bullseye" : "2.31",
-    "debian:bookworm" : "2.35" ]
+    "debian:bookworm" : "2.35",
+    "debian:trixie" : "2.39" ]
 
 void uploadFileToS3(String SRC_FILE_PATH, String DST_DIRECTORY, String DST_FILE_NAME) {
     echo "Upload ${SRC_FILE_PATH} file to S3 ${S3_ROOT_DIR}/${DST_DIRECTORY}/${DST_FILE_NAME}. Max retries: ${MAX_S3_RETRIES}"
@@ -537,7 +539,7 @@ pipeline {
             description: 'path to cmake binary',
             name: 'JOB_CMAKE')
         choice(
-            choices: 'centos:7\ncentos:8\noraclelinux:9\nubuntu:focal\nubuntu:jammy\nubuntu:noble\ndebian:bullseye\ndebian:bookworm',
+            choices: 'centos:7\noraclelinux:8\noraclelinux:9\noraclelinux:10\nubuntu:focal\nubuntu:jammy\nubuntu:noble\ndebian:bullseye\ndebian:bookworm\ndebian:trixie',
             description: 'OS version for compilation',
             name: 'DOCKER_OS')
         choice(
@@ -638,10 +640,10 @@ pipeline {
                 git branch: JENKINS_SCRIPTS_BRANCH, url: JENKINS_SCRIPTS_REPO
 
                 script {
-                    BUILD_TRIGGER_BY = " (${currentBuild.getBuildCauses()[0].userId})"
-                    if (BUILD_TRIGGER_BY == " (null)") {
-                        BUILD_TRIGGER_BY = " "
-                    }
+                    // A build can have no cause at all (Replay, or the EC2 Fleet
+                    // plugin's task resubmit); indexing [0] then throws an NPE.
+                    def userCause = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')
+                    BUILD_TRIGGER_BY = userCause ? " (${userCause[0].userId})" : " "
                     currentBuild.displayName = "${BUILD_NUMBER} ${CMAKE_BUILD_TYPE}/${DOCKER_OS}${BUILD_TRIGGER_BY} ${CUSTOM_BUILD_NAME}"
                 }
 

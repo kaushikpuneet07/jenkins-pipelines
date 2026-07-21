@@ -5,7 +5,7 @@ library changelog: false, identifier: 'lib@master', retriever: modernSCM([
 
 pipeline {
     agent {
-        label 'agent-amd64-ol9'
+        label params.USE_ONDEMAND ? 'agent-amd64-ondemand' : 'agent-amd64'
     }
     parameters {
         string(
@@ -14,9 +14,14 @@ pipeline {
             name: 'GIT_BRANCH')
         choice(
             // default is 'experimental'
-            choices: ['experimental', 'testing', 'laboratory'],
-            description: 'Repo component to push packages to',
+            choices: ['experimental', 'testing'],
+            description: 'Repository to push packages to',
             name: 'DESTINATION')
+        booleanParam(
+            defaultValue: false,
+            description: 'Use on-demand instances instead of spot (for RC/Release builds)',
+            name: 'USE_ONDEMAND'
+        )
     }
     options {
         buildDiscarder(logRotator(numToKeepStr: '30'))
@@ -46,7 +51,6 @@ pipeline {
                     git rev-parse --short HEAD > shortCommit
                     echo "UPLOAD/pmm3-components/yum/${DESTINATION}/${JOB_NAME}/pmm/${VERSION}/${GIT_BRANCH}/$(cat shortCommit)/${BUILD_NUMBER}" > uploadPath
                 '''
-
                 script {
                     if (params.DESTINATION == "testing") {
                         env.DOCKER_LATEST_TAG     = "${VERSION}-rc${BUILD_NUMBER}"
@@ -78,21 +82,21 @@ pipeline {
         }
         stage('Build client source rpm') {
             steps {
-                sh "${PATH_TO_SCRIPTS}/build-client-srpm public.ecr.aws/e7j3v3n0/rpmbuild:3"
+                sh "${PATH_TO_SCRIPTS}/build-client-srpm"
                 stash includes: 'results/srpm/pmm*-client-*.src.rpm', name: 'rpms'
                 uploadRPM()
             }
         }
         stage('Build client binary rpm') {
             steps {
-                sh """
+                sh '''
                     set -o errexit
 
-                    ${PATH_TO_SCRIPTS}/build-client-rpm public.ecr.aws/e7j3v3n0/rpmbuild:3
+                    ${PATH_TO_SCRIPTS}/build-client-rpm
 
                     mkdir -p tmp/pmm-server/RPMS/
                     cp results/rpm/pmm*-client-*.rpm tmp/pmm-server/RPMS/
-                """
+                '''
                 stash includes: 'tmp/pmm-server/RPMS/*.rpm', name: 'rpms'
                 uploadRPM()
             }
@@ -102,9 +106,6 @@ pipeline {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'pmm-staging-slave', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
                     sh '''
                         set -o errexit
-
-                        export RPMBUILD_DOCKER_IMAGE=public.ecr.aws/e7j3v3n0/rpmbuild:3
-                        export RPMBUILD_DIST="el9"
 
                         ${PATH_TO_SCRIPTS}/build-server-rpm-all
                     '''
@@ -125,10 +126,11 @@ pipeline {
                     set -o errexit
 
                     export DOCKER_TAG=perconalab/pmm-server:$(date -u '+%Y%m%d%H%M')
-                    export RPMBUILD_DOCKER_IMAGE=public.ecr.aws/e7j3v3n0/rpmbuild:3
-                    export RPMBUILD_DIST="el9"
                     export DOCKERFILE=Dockerfile.el9
-                    # Build a docker image
+                    if [ -n "${DOCKER_RC_TAG}" ]; then
+                        export PMM_PERCONA_PLATFORM_ADDRESS=https://check.percona.com
+                    fi
+
                     ${PATH_TO_SCRIPTS}/build-server-docker
 
                     if [ -n "${DOCKER_RC_TAG}" ]; then
@@ -145,22 +147,34 @@ pipeline {
                     env.IMAGE = sh(returnStdout: true, script: "cat DOCKER_TAG").trim()
                     env.TIMESTAMP_TAG = sh(returnStdout: true, script: "cat TIMESTAMP_TAG").trim()
                 }
+                withCredentials([string(credentialsId: 'LAUNCHABLE_TOKEN', variable: 'LAUNCHABLE_TOKEN')]) {
+                    sh '''
+                        set -o errexit
+                        pip3 install --user --upgrade launchable~=1.0 || true
+                        launchable verify || true
+                        echo "$(git submodule status)" || true
+
+                        export DOCKER_IMAGE_ID=$(docker inspect perconalab/pmm-server:${IMAGE} -f "{{.Id}}") || true
+
+                        launchable record build --name "${DOCKER_IMAGE_ID}" --lineage "perconalab/pmm-server:${IMAGE}" || true
+                    '''
+                }
             }
         }
         stage('Trigger a devcontainer build') {
             when {
                 // a guard to avoid unnecessary builds
                 expression { params.GIT_BRANCH == "v3" && params.DESTINATION == "experimental" }
-            }          
+            }
             steps {
                 withCredentials([string(credentialsId: 'GITHUB_API_TOKEN', variable: 'GITHUB_API_TOKEN')]) {
                     sh '''
-                        # 'ref' is a required parameter, it should always equal 'v3' (or 'main' for v2)
+                        # 'ref' is a required parameter, it should always equal 'main' (the default branch of percona/pmm)
                         curl -L -X POST \
                             -H "Accept: application/vnd.github+json" \
                             -H "Authorization: token ${GITHUB_API_TOKEN}" \
                             "https://api.github.com/repos/percona/pmm/actions/workflows/devcontainer.yml/dispatches" \
-                            -d '{"ref":"v3"}'
+                            -d '{"ref":"main"}'
                     '''
                 }
             }
@@ -171,7 +185,7 @@ pipeline {
             }
         }
     }
-    post {        
+    post {
         success {
             script {
                 slackSend botUser: true, channel: '#pmm-notifications', color: '#00FF00', message: "[${JOB_NAME}]: build finished - ${IMAGE}, URL: ${BUILD_URL}"

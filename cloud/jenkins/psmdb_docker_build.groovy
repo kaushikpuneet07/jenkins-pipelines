@@ -1,41 +1,162 @@
 void build(String IMAGE_SUFFIX){
-    sh """
-        cd ./source/
-        if [ ${IMAGE_SUFFIX} = backup ]; then
-            docker build --no-cache --progress plain --squash -t perconalab/percona-server-mongodb-operator:main-${IMAGE_SUFFIX} -f percona-backup-mongodb/Dockerfile percona-backup-mongodb
-        else
-            DOCKER_FILE_PREFIX=\$(echo ${IMAGE_SUFFIX} | tr -d 'mongod')
-            docker build --no-cache --progress plain --squash -t perconalab/percona-server-mongodb-operator:main-${IMAGE_SUFFIX} -f percona-server-mongodb-\$DOCKER_FILE_PREFIX/Dockerfile percona-server-mongodb-\$DOCKER_FILE_PREFIX
-            docker build --build-arg DEBUG=1 --no-cache --progress plain --squash -t perconalab/percona-server-mongodb-operator:main-${IMAGE_SUFFIX}-debug -f percona-server-mongodb-\$DOCKER_FILE_PREFIX/Dockerfile percona-server-mongodb-\$DOCKER_FILE_PREFIX
-        fi
-    """
-}
-void checkImageForDocker(String IMAGE_SUFFIX){
-     withCredentials([usernamePassword(credentialsId: 'hub.docker.com', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
-        sh """
-            IMAGE_SUFFIX=${IMAGE_SUFFIX}
-            IMAGE_NAME='percona-server-mongodb-operator'
-            TrivyLog="$WORKSPACE/trivy-\$IMAGE_NAME-${IMAGE_SUFFIX}-psmdb.xml"
-
-            sg docker -c "
-                docker login -u '${USER}' -p '${PASS}'
-                /usr/local/bin/trivy -q --cache-dir /mnt/jenkins/trivy-${JOB_NAME}/ image --format template --template @/tmp/junit.tpl -o \$TrivyLog --timeout 40m0s --ignore-unfixed --exit-code 0 --severity HIGH,CRITICAL perconalab/\$IMAGE_NAME:\${IMAGE_SUFFIX}
-            "
-        """
-    }
-}
-
-void pushImageToDocker(String IMAGE_SUFFIX){
     withCredentials([usernamePassword(credentialsId: 'hub.docker.com', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
         sh """
-            IMAGE_SUFFIX=${IMAGE_SUFFIX}
-            sg docker -c "
-                docker login -u '${USER}' -p '${PASS}'
-                docker push perconalab/percona-server-mongodb-operator:main-${IMAGE_SUFFIX}
-                docker logout
-            "
+            set -e
+
+            cd ./source/
+            echo "\$PASS" | docker login -u "\$USER" --password-stdin
+            docker buildx use multiarch 2>/dev/null || docker buildx create --name multiarch --use
+            docker buildx inspect --bootstrap
+
+            # amd64 uses the given amd64 Dockerfile, arm64 the arm64 one; merge both into one manifest
+            build_multiarch() {
+                TAG=\$1
+                CONTEXT=\$2
+                AMD_DOCKERFILE=\$3
+                ARM_DOCKERFILE=\$4
+                docker buildx build --platform linux/amd64 --no-cache --progress plain --push \
+                    -t \${TAG}-amd64 -f \${CONTEXT}/\${AMD_DOCKERFILE} \${CONTEXT}
+                docker buildx build --platform linux/arm64 --no-cache --progress plain --push \
+                    -t \${TAG}-arm64 -f \${CONTEXT}/\${ARM_DOCKERFILE} \${CONTEXT}
+                docker buildx imagetools create -t \${TAG} \${TAG}-amd64 \${TAG}-arm64
+            }
+
+            BASE_TAG=${IMAGE_REPOSITORY}:${GIT_PD_BRANCH}-${IMAGE_SUFFIX}
+
+            if [ ${IMAGE_SUFFIX} = backup ]; then
+                build_multiarch "\$BASE_TAG" percona-backup-mongodb Dockerfile Dockerfile.aarch64
+            elif [ ${IMAGE_SUFFIX} = mongot ]; then
+                build_multiarch "\$BASE_TAG" percona-server-mongodb-mongot Dockerfile Dockerfile.aarch64
+            else
+                DOCKER_FILE_PREFIX=\$(echo ${IMAGE_SUFFIX} | tr -d 'mongod')
+                CONTEXT=percona-server-mongodb-\$DOCKER_FILE_PREFIX
+                PSMDB_REPO=release
+                if [ ${IMAGE_SUFFIX} = mongod8.3 ]; then
+                    PSMDB_REPO=experimental
+                fi
+
+                # keep the package channel consistent across the amd64 and arm64 Dockerfiles
+                sed -E "s/ENV PSMDB_REPO (.+)/ENV PSMDB_REPO \${PSMDB_REPO}/" -i \${CONTEXT}/Dockerfile \${CONTEXT}/Dockerfile.aarch64
+                build_multiarch "\$BASE_TAG" "\$CONTEXT" Dockerfile Dockerfile.aarch64
+            fi
+            docker logout
         """
     }
+}
+
+List selectedPsmdbImageSuffixes() {
+    def images = []
+
+    if (params.IMAGE_BACKUP) {
+        images << 'backup'
+    }
+    if (params.IMAGE_MONGOD60) {
+        images << 'mongod6.0'
+    }
+    if (params.IMAGE_MONGOD70) {
+        images << 'mongod7.0'
+    }
+    if (params.IMAGE_MONGOD80) {
+        images << 'mongod8.0'
+    }
+    if (params.IMAGE_MONGOD83) {
+        images << 'mongod8.3'
+    }
+    if (params.IMAGE_SEARCH) {
+        images << 'mongot'
+    }
+
+    return images
+}
+
+void verifyImage(String IMAGE){
+    withCredentials([usernamePassword(credentialsId: 'hub.docker.com', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
+        sh """
+            IMAGE='${IMAGE}'
+            sg docker -c "
+                set -e
+                echo "\$PASS" | docker login -u "\$USER" --password-stdin
+                docker buildx imagetools inspect \$IMAGE
+                docker logout
+            "
+            echo "\$IMAGE" >> list-of-images.txt
+        """
+    }
+}
+
+void checkImagesForDocker(String imagesListPath){
+    withCredentials([usernamePassword(credentialsId: 'hub.docker.com', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
+        sh """
+            IMAGES_LIST_PATH='${imagesListPath}'
+
+            while IFS= read -r IMAGE || [ -n "\$IMAGE" ]; do
+                [ -z "\$IMAGE" ] && continue
+                IMAGE_ID=\$(echo "\$IMAGE" | sed 's#[/:]#-#g')
+                TrivyLog="$WORKSPACE/trivy-\${IMAGE_ID}.xml"
+
+                sg docker -c "
+                    echo "\$PASS" | docker login -u "\$USER" --password-stdin
+                    /usr/local/bin/trivy -q --cache-dir /mnt/jenkins/trivy-${JOB_NAME}/ image --format template --template @/tmp/junit.tpl -o \$TrivyLog --timeout 10m0s --ignore-unfixed --exit-code 0 --severity HIGH,CRITICAL \$IMAGE
+                    docker logout
+                "
+            done < "\$IMAGES_LIST_PATH"
+
+            for REPORT in trivy-*.xml; do
+                [ -f "\$REPORT" ] || continue
+                IMAGE_ID=\$(basename "\$REPORT" .xml | sed 's/^trivy-//')
+                perl -pi -e 's/<testcase classname="/<testcase classname="'"\$IMAGE_ID"' :: /g; s/<testcase name="/<testcase name="'"\$IMAGE_ID"' :: /g' "\$REPORT"
+            done
+        """
+    }
+}
+void generateImageSummary(filePath) {
+    def images = readFile(filePath).trim().split("\n")
+
+    def report = "<h2>Image Summary Report</h2>\n"
+    report += "<p><strong>Total Images:</strong> ${images.size()}</p>\n"
+    report += "<ul>\n"
+
+    images.each { image ->
+        report += "<li>${image}</li>\n"
+    }
+
+    report += "</ul>\n"
+    return report
+}
+
+String getTrivyCveSummary(String reportGlob) {
+    int highCount = 0
+    int criticalCount = 0
+    def rows = []
+
+    findFiles(glob: reportGlob).each { file ->
+        def report = readFile(file.path)
+        int imageHighCount = report.split('\\[HIGH\\]', -1).size() - 1
+        int imageCriticalCount = report.split('\\[CRITICAL\\]', -1).size() - 1
+        String imageName = file.name.replaceFirst('^trivy-', '').replaceFirst('\\.xml$', '')
+
+        highCount += imageHighCount
+        criticalCount += imageCriticalCount
+        rows << [name: imageName, critical: imageCriticalCount, high: imageHighCount]
+    }
+
+    if (highCount == 0 && criticalCount == 0) {
+        return ''
+    }
+
+    int nameWidth = 'IMAGE'.length()
+    rows.each { r ->
+        if (r.name.length() > nameWidth) {
+            nameWidth = r.name.length()
+        }
+    }
+    String header = "${'IMAGE'.padRight(nameWidth)}  ${'CRITICAL'.padLeft(8)}  ${'HIGH'.padLeft(4)}"
+    String table = header + '\n'
+    rows.each { r ->
+        table += "${r.name.padRight(nameWidth)}  ${r.critical.toString().padLeft(8)}  ${r.high.toString().padLeft(4)}\n"
+    }
+
+    return "\n*CVEs found:*\n```\n${table}```\n"
 }
 pipeline {
     parameters {
@@ -55,12 +176,23 @@ pipeline {
             defaultValue: 'https://github.com/percona/percona-docker',
             description: 'percona/percona-docker repository',
             name: 'GIT_PD_REPO')
+
+        booleanParam(name: 'IMAGE_OPERATOR', defaultValue: true, description: 'Build PSMDB operator image')
+        booleanParam(name: 'IMAGE_BACKUP', defaultValue: true, description: 'Build PBM image')
+        booleanParam(name: 'IMAGE_MONGOD60', defaultValue: true, description: 'Build PSMDB 6.0 image')
+        booleanParam(name: 'IMAGE_MONGOD70', defaultValue: true, description: 'Build PSMDB 7.0 image')
+        booleanParam(name: 'IMAGE_MONGOD80', defaultValue: true, description: 'Build PSMDB 8.0 image')
+        booleanParam(name: 'IMAGE_MONGOD83', defaultValue: true, description: 'Build PSMDB 8.3 image')
+        booleanParam(name: 'IMAGE_SEARCH', defaultValue: true, description: 'Build mongot image')
     }
     agent {
-         label 'docker'
+         label 'docker-x64-min'
     }
     environment {
+        PATH = "${WORKSPACE}/node_modules/.bin:$PATH" // Add local npm bin to PATH
+        IMAGE_REPOSITORY = 'perconalab/percona-server-mongodb-operator'
         DOCKER_REPOSITORY_PASSPHRASE = credentials('DOCKER_REPOSITORY_PASSPHRASE')
+        TRIVY_VERSION = '0.69.3'
     }
     options {
         skipDefaultCheckout()
@@ -72,11 +204,13 @@ pipeline {
             steps {
                 git branch: 'master', url: 'https://github.com/Percona-Lab/jenkins-pipelines'
                 sh """
-                    TRIVY_VERSION=\$(curl --silent 'https://api.github.com/repos/aquasecurity/trivy/releases/latest' | grep '"tag_name":' | tr -d '"' | sed -E 's/.*v(.+),.*/\\1/')
+                    TRIVY_CHECKSUM="1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75"
                     wget https://github.com/aquasecurity/trivy/releases/download/v\${TRIVY_VERSION}/trivy_\${TRIVY_VERSION}_Linux-64bit.tar.gz
+                    echo "\${TRIVY_CHECKSUM}  trivy_\${TRIVY_VERSION}_Linux-64bit.tar.gz" | sha256sum -c -
                     sudo tar zxvf trivy_\${TRIVY_VERSION}_Linux-64bit.tar.gz -C /usr/local/bin/
+                    rm -f trivy_\${TRIVY_VERSION}_Linux-64bit.tar.gz
 
-                    if [ ! -f junit.tpl ]; then
+                    if [ ! -f /tmp/junit.tpl ]; then
                         wget --directory-prefix=/tmp https://raw.githubusercontent.com/aquasecurity/trivy/v\${TRIVY_VERSION}/contrib/junit.tpl
                     fi
 
@@ -94,21 +228,35 @@ pipeline {
                 sh '''
                     rm -rf cloud
                 '''
+
+                script {
+                    if (!params.IMAGE_OPERATOR && selectedPsmdbImageSuffixes().isEmpty()) {
+                        error('Select at least one image to build')
+                    }
+
+                    echo "Selected images: ${([params.IMAGE_OPERATOR ? 'operator' : null] + selectedPsmdbImageSuffixes()).findAll { it }.join(', ')}"
+                }
             }
         }
 
         stage('Build and push PSMDB operator docker image') {
+            when {
+                expression { params.IMAGE_OPERATOR }
+            }
             steps {
                 retry(3) {
                     timeout(time: 30, unit: 'MINUTES') {
                         unstash "sourceFILES"
                         withCredentials([usernamePassword(credentialsId: 'hub.docker.com', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
                             sh '''
-                                docker buildx create --use
-                                cd ./source/
+                                docker buildx use multiarch 2>/dev/null || docker buildx create --name multiarch --use
+                                docker buildx inspect --bootstrap
                                 sg docker -c "
-                                    docker login -u '${USER}' -p '${PASS}'
-                                    RHEL=1 DOCKER_DEFAULT_PLATFORM='linux/amd64,linux/arm64' ./e2e-tests/build
+                                    echo "\$PASS" | docker login -u "\$USER" --password-stdin
+                                    pushd source
+                                    export IMAGE=${IMAGE_REPOSITORY}:${GIT_BRANCH}
+                                    DOCKER_DEFAULT_PLATFORM='linux/amd64,linux/arm64' ./e2e-tests/build
+                                    popd
                                     docker logout
                                 "
                             '''
@@ -120,148 +268,49 @@ pipeline {
 
 
         stage('Build PSMDB docker images') {
+            when {
+                expression { !selectedPsmdbImageSuffixes().isEmpty() }
+            }
             steps {
                 unstash "checkout"
                 sh """
-                    sudo rm -rf ./source
+                    sudo mv ./source ./operator-source
                     export GIT_REPO=$GIT_PD_REPO
                     export GIT_BRANCH=$GIT_PD_BRANCH
                     ./cloud/local/checkout
                 """
-                echo 'Build PBM docker image'
-                retry(3) {
-                    build('backup')
-                }
-                echo 'Build PSMDB docker images'
-                retry(3) {
-                    build('mongod5.0')
-                }
-                retry(3) {
-                    build('mongod6.0')
-                }
-                retry(3) {
-                    build('mongod7.0')
-                }
-                retry(3) {
-                    build('mongod8.0')
+                script {
+                    selectedPsmdbImageSuffixes().each { imageSuffix ->
+                        echo "Build ${imageSuffix} docker image"
+                        retry(3) {
+                            build(imageSuffix)
+                        }
+                    }
                 }
             }
         }
 
-        stage('Push PSMDB images to Docker registry') {
+        stage('Verify and list PSMDB images') {
             steps {
-                pushImageToDocker('mongod5.0')
-                pushImageToDocker('mongod5.0-debug')
-                pushImageToDocker('mongod6.0')
-                pushImageToDocker('mongod6.0-debug')
-                pushImageToDocker('mongod7.0')
-                pushImageToDocker('mongod7.0-debug')
-                pushImageToDocker('mongod8.0')
-                pushImageToDocker('mongod8.0-debug')
-                pushImageToDocker('backup')
+                script {
+                    if (params.IMAGE_OPERATOR) {
+                        verifyImage("${IMAGE_REPOSITORY}:${GIT_BRANCH}")
+                    }
+
+                    selectedPsmdbImageSuffixes().each { imageSuffix ->
+                        verifyImage("${IMAGE_REPOSITORY}:${GIT_PD_BRANCH}-${imageSuffix}")
+                    }
+                }
             }
         }
-       stage('Trivy Checks') {
-            parallel {
-                stage('psmdb operator'){
-                    steps {
-                        checkImageForDocker('main')
-                    }
-                    post {
-                        always {
-                            junit allowEmptyResults: true, skipPublishingChecks: true, testResults: "*-main-psmdb.xml"
-                        }
-                    }
-                }
-                stage('mongod5.0'){
-                    steps {
-                        checkImageForDocker('main-mongod5.0')
-                    }
-                    post {
-                        always {
-                            junit allowEmptyResults: true, skipPublishingChecks: true, testResults: "*-mongod5.0-psmdb.xml"
-                        }
-                    }
-                }
-                stage('mongod6.0'){
-                    steps {
-                        checkImageForDocker('main-mongod6.0')
-                    }
-                    post {
-                        always {
-                            junit allowEmptyResults: true, skipPublishingChecks: true, testResults: "*-mongod6.0-psmdb.xml"
-                        }
-                    }
-                }
-                stage('mongod7.0'){
-                    steps {
-                        checkImageForDocker('main-mongod7.0')
-                    }
-                    post {
-                        always {
-                            junit allowEmptyResults: true, skipPublishingChecks: true, testResults: "*-mongod7.0-psmdb.xml"
-                        }
-                    }
-                }
-                stage('mongod8.0'){
-                    steps {
-                        checkImageForDocker('main-mongod8.0')
-                    }
-                    post {
-                        always {
-                            junit allowEmptyResults: true, skipPublishingChecks: true, testResults: "*-mongod8.0-psmdb.xml"
-                        }
-                    }
-                }
-                stage('mongod5.0-debug'){
-                    steps {
-                        checkImageForDocker('main-mongod5.0-debug')
-                    }
-                    post {
-                        always {
-                            junit allowEmptyResults: true, skipPublishingChecks: true, testResults: "*-main-mongod5.0-debug-psmdb.xml"
-                        }
-                    }
-                }
-                stage('mongod6.0-debug'){
-                    steps {
-                        checkImageForDocker('main-mongod6.0-debug')
-                    }
-                    post {
-                        always {
-                            junit allowEmptyResults: true, skipPublishingChecks: true, testResults: "*-main-mongod6.0-debug-psmdb.xml"
-                        }
-                    }
-                }
-                stage('mongod7.0-debug'){
-                    steps {
-                        checkImageForDocker('main-mongod7.0-debug')
-                    }
-                    post {
-                        always {
-                            junit allowEmptyResults: true, skipPublishingChecks: true, testResults: "*-main-mongod7.0-debug-psmdb.xml"
-                        }
-                    }
-                }
-                stage('mongod8.0-debug'){
-                    steps {
-                        checkImageForDocker('main-mongod8.0-debug')
-                    }
-                    post {
-                        always {
-                            junit allowEmptyResults: true, skipPublishingChecks: true, testResults: "*-main-mongod8.0-debug-psmdb.xml"
-                        }
-                    }
-                }
-                stage('PBM'){
-                    steps {
-                        checkImageForDocker('main-backup')
-                    }
-                    post {
-                        always {
-                            junit allowEmptyResults: true, skipPublishingChecks: true, testResults: "*-main-backup-psmdb.xml"
-                        }
-                    }
+        stage('Check PSMDB docker images') {
+            steps {
+                checkImagesForDocker('list-of-images.txt')
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, skipPublishingChecks: true, testResults: "trivy-*.xml"
+                    archiveArtifacts artifacts: "trivy-*.xml", allowEmptyArchive: true
                 }
             }
         }
@@ -269,17 +318,35 @@ pipeline {
 
     post {
         always {
+            script {
+                def summary = generateImageSummary('list-of-images.txt')
+
+                addSummary(icon: 'symbol-aperture-outline plugin-ionicons-api',
+                    text: "<pre>${summary}</pre>"
+                )
+                // Also save as a file if needed
+                 writeFile(file: 'image-summary.html', text: summary)
+            }
+        }
+        unstable {
+            script {
+                def trivySummary = getTrivyCveSummary('trivy-*.xml')
+                slackSend channel: '#cloud-dev-ci', color: '#F6F930', message: "Building of *PSMDB* operator docker images unstable.${trivySummary} Please check the log ${BUILD_URL}"
+            }
+        }
+        failure {
+            script {
+                def trivySummary = getTrivyCveSummary('trivy-*.xml')
+                slackSend channel: '#cloud-dev-ci', color: '#FF0000', message: "Building of *PSMDB* operator docker images failed.${trivySummary} Please check the log ${BUILD_URL}"
+            }
+        }
+        cleanup {
             sh '''
+                docker logout || true
                 sudo docker rmi -f \$(sudo docker images -q) || true
                 sudo rm -rf ./source/build
             '''
             deleteDir()
-        }
-        unstable {
-            slackSend channel: '#cloud-dev-ci', color: '#F6F930', message: "Building of PSMDB docker images unstable. Please check the log ${BUILD_URL}"
-        }
-        failure {
-            slackSend channel: '#cloud-dev-ci', color: '#FF0000', message: "Building of PSMDB docker images failed. Please check the log ${BUILD_URL}"
         }
     }
 }

@@ -17,14 +17,13 @@
     - choice:
         name: DOCKER_OS
         choices:
-          - centos:7
           - centos:8
           - oraclelinux:9
-          - ubuntu:bionic
           - ubuntu:focal
           - ubuntu:jammy
-          - debian:buster
+          - ubuntu:noble
           - debian:bullseye
+          - debian:bookworm
           - asan
         description: OS version for compilation
     - choice:
@@ -72,8 +71,9 @@
         default: true
         description: "Run kmip tests"
     - choice:
-        name: LABEL
+        name: CLOUD
         choices:
-        - docker
-        - docker-32gb
-        description: Run build on specified instance type. 
+        - "Hetzner"
+        - "AWS"
+        description: "Host provider for Jenkins workers"
+

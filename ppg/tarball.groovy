@@ -4,11 +4,11 @@ library changelog: false, identifier: "lib@master", retriever: modernSCM([
 ])
 
 pipeline {
-  agent {
-  label 'min-ol-9-x64'
-  }
+    agent {
+        label 'min-ol-9-x64'
+    }
 
-  parameters {
+    parameters {
         choice(
             name: 'PLATFORM',
             description: 'For what platform (OS) need to test',
@@ -19,16 +19,26 @@ pipeline {
             description: 'SSL version to use',
             choices: [
                 '1',
-                '3'
+                '3',
+                '3.5'
             ]
         )
         string(
-            defaultValue: 'ppg-17.0',
+            defaultValue: 'ppg-18.4',
             description: 'PG version for test',
             name: 'VERSION'
         )
+        choice(
+            name: 'IO_METHOD',
+            description: 'io_method to use for the server (applicable to pg-18 and onwards only).',
+            choices: [
+                'worker',
+                'sync',
+                'io_uring'
+            ]
+        )
         string(
-            defaultValue: 'https://downloads.percona.com/downloads/TESTING/pg_tarballs-17.0/percona-postgresql-17.0-ssl1.1-linux-x86_64.tar.gz',
+            defaultValue: 'https://downloads.percona.com/downloads/TESTING/pg_tarballs-18.4/percona-postgresql-18.4-ssl1.1-linux-x86_64.tar.gz',
             description: 'URL for tarball.',
             name: 'TARBALL_URL'
         )
@@ -37,77 +47,81 @@ pipeline {
             description: 'Branch for testing repository',
             name: 'TESTING_BRANCH'
         )
-        string(
-            defaultValue: 'yes',
-            description: 'Destroy VM after tests',
-            name: 'DESTROY_ENV'
+        booleanParam(
+            name: 'DESTROY_ENV',
+            defaultValue: true,
+            description: 'Destroy VM after tests'
         )
-  }
-  environment {
-      PATH = '/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/home/ec2-user/.local/bin';
-      MOLECULE_DIR = "ppg/pg-tarballs";
-  }
-  options {
-          withCredentials(moleculeDistributionJenkinsCreds())
-          disableConcurrentBuilds()
-  }
-  stages {
-    stage('Set build name'){
-      steps {
+    }
+    environment {
+        PATH = '/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/home/ec2-user/.local/bin'
+        MOLECULE_DIR = "ppg/pg-tarballs"
+    }
+    options {
+        withCredentials(moleculeDistributionJenkinsCreds())
+        buildDiscarder(logRotator(numToKeepStr: '50'))
+        retry(conditions: [agent()], count: 2)
+    }
+    stages {
+        stage('Set build name') {
+            steps {
                 script {
                     currentBuild.displayName = "${env.BUILD_NUMBER}-${env.VERSION}-${env.PLATFORM}"
                 }
             }
         }
-    stage('Checkout') {
-      steps {
-            deleteDir()
-            git poll: false, branch: TESTING_BRANCH, url: 'https://github.com/Percona-QA/ppg-testing.git'
+        stage('Checkout') {
+            steps {
+                deleteDir()
+                git poll: false, branch: TESTING_BRANCH, url: 'https://github.com/Percona-QA/ppg-testing.git'
+            }
         }
-    }
-    stage ('Prepare') {
-      steps {
-          script {
-              installMoleculePython39()
+        stage('Prepare') {
+            steps {
+                script {
+                    installMoleculePython39()
+                }
+            }
+        }
+        stage('Create virtual machines') {
+            steps {
+                script {
+                    moleculeExecuteActionWithScenarioPPG(env.MOLECULE_DIR, "create", env.PLATFORM)
+                }
+            }
+        }
+        stage('Run playbook for test') {
+            steps {
+                script {
+                    moleculeExecuteActionWithScenarioPPG(env.MOLECULE_DIR, "converge", env.PLATFORM)
+                }
+            }
+        }
+        stage('Start testinfra tests') {
+            steps {
+                script {
+                    moleculeExecuteActionWithScenarioPPG(env.MOLECULE_DIR, "verify", env.PLATFORM)
+                }
+            }
+        }
+        stage('Start Cleanup ') {
+            steps {
+                script {
+                    moleculeExecuteActionWithScenarioPPG(env.MOLECULE_DIR, "cleanup", env.PLATFORM)
+                }
             }
         }
     }
-    stage ('Create virtual machines') {
-      steps {
-          script{
-              moleculeExecuteActionWithScenario(env.MOLECULE_DIR, "create", env.PLATFORM)
+    post {
+        always {
+            script {
+                if (params.DESTROY_ENV) {
+                    echo "DESTROY_ENV is true. Cleaning up resources..."
+                    moleculeExecuteActionWithScenarioPPG(env.MOLECULE_DIR, "destroy", env.PLATFORM)
+                } else {
+                    echo "DESTROY_ENV is false. Leaving VMs active for debugging."
+                }
             }
         }
     }
-    stage ('Run playbook for test') {
-      steps {
-          script{
-              moleculeExecuteActionWithScenario(env.MOLECULE_DIR, "converge", env.PLATFORM)
-            }
-        }
-    }
-    stage ('Start testinfra tests') {
-      steps {
-            script{
-              moleculeExecuteActionWithScenario(env.MOLECULE_DIR, "verify", env.PLATFORM)
-            }
-        }
-    }
-      stage ('Start Cleanup ') {
-        steps {
-             script {
-               moleculeExecuteActionWithScenario(env.MOLECULE_DIR, "cleanup", env.PLATFORM)
-            }
-        }
-    }
-  }
-  post {
-    always {
-          script {
-             if (env.DESTROY_ENV == "yes") {
-                        moleculeExecuteActionWithScenario(env.MOLECULE_DIR, "destroy", env.PLATFORM)
-                    }
-        }
-    }
-  }
 }

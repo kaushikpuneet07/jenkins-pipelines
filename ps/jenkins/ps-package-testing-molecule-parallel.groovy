@@ -4,35 +4,61 @@
         remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
     ])
 
-    pipeline {
-    agent {
-        label 'min-bookworm-x64'
-    }
-    environment {
-        product_to_test = "${params.product_to_test}"
-        git_repo = "${params.git_repo}"
-        install_repo = "${params.install_repo}"
-        action_to_test  = "${params.action_to_test}"
-        check_warnings = "${params.check_warnings}"
-        install_mysql_shell = "${params.install_mysql_shell}"
-    }
-    parameters {
-        choice(
-            choices: ['ps_80','ps_84','ps_lts_innovation','client_test'],
-            description: 'Choose the product version to test: PS8.0 OR ps_lts_innovatoin',
-            name: 'product_to_test'
-        )
+properties([
+    parameters([
+        [
+            $class: 'ChoiceParameter',
+            choiceType: 'PT_SINGLE_SELECT',
+            description: 'Choose the product version to test: PS8.0 OR ps_innovation',
+            name: 'product_to_test',
+            script: [
+                $class: 'GroovyScript',
+                script: [
+                    classpath: [],
+                    sandbox: true,
+                    script: 'return ["ps_57", "ps_80", "ps_84", "ps_innovation", "client_test"]'
+                ]
+            ]
+        ],
         choice(
             choices: ['testing', 'main', 'experimental'],
             description: 'Choose the repo to install packages and run the tests',
             name: 'install_repo'
-        )
+        ),
+        [
+            $class: 'CascadeChoiceParameter',
+            choiceType: 'PT_SINGLE_SELECT',
+            description: 'EOL version or Normal (only available for ps_57)',
+            name: 'EOL',
+            referencedParameters: 'product_to_test',
+            script: [
+                $class: 'GroovyScript',
+                script: [
+                    classpath: [],
+                    sandbox: true,
+                    script: '''
+                        if (product_to_test == "ps_57") {
+                            return ["yes", "no"]
+                        }
+                        else {
+                            return ["no"]
+                        }
+                    '''
+                ]
+            ]
+        ],
         string(
             defaultValue: 'https://github.com/Percona-QA/package-testing.git',
             description: 'repo name',
             name: 'git_repo',
             trim: false
-        )
+        ),
+        string(
+            defaultValue: 'master',
+            description: 'Branch name',
+            name: 'git_branch',
+            trim: false
+        ),
         choice(
             choices: [
                 'yes',
@@ -40,7 +66,7 @@
             ],
             description: 'check_warnings',
             name: 'check_warnings'
-        )
+        ),
         choice(
             choices: [
                 'yes',
@@ -49,6 +75,20 @@
             description: 'Install MySQL Shell',
             name: 'install_mysql_shell'
         )
+    ])
+])
+
+    pipeline {
+    agent {
+        label 'min-bookworm-x64'
+    }
+    environment {
+        product_to_test = "${params.product_to_test}"
+        git_repo = "${params.git_repo}"
+        install_repo = "${params.install_repo}"
+        check_warnings = "${params.check_warnings}"
+        install_mysql_shell = "${params.install_mysql_shell}"
+        EOL = "${params.EOL}"
     }
     options {
         withCredentials(moleculePdpsJenkinsCreds())
@@ -86,11 +126,40 @@
                     stage("kmip") {
                         steps {
                             script {
-                                runpsptjob("kmip")
+                                if (params.product_to_test != 'ps_57' ) {
+                                    runpsptjob("kmip")
+                                } else {
+                                    echo "Skip as not supported for PS_57"
+                                }
                             }
                         }
                     }
 
+                    stage("major_upgrade_to") {
+                        steps {
+                            script {
+                                if (params.product_to_test == 'ps_57' ) {
+                                    echo "Skip as not supported for major_upgrade_to"
+                                } else {
+                                    runpsptjob("major_upgrade_to")
+                                }
+                            }
+                        }
+                    }
+                    
+                    stage("major_upgrade_from") {
+                        steps {
+                            script {
+                                if (params.product_to_test == 'ps_57' ) {
+                                    runpsptjob("major_upgrade_from")
+                                } else {
+                                    echo "Skip as not supported for major_upgrade_from"
+                                }
+                            }
+                        }
+                    }
+
+                    /*
                     stage("kms") {
                         steps {
                             script {
@@ -98,13 +167,9 @@
                             }
                         }
                     }
-                
+                    */
                 }
-                
-
             }
-
-
         }
     }
 
@@ -117,7 +182,9 @@ void runpsptjob(String action_to_test) {
             string(name: "check_warnings", value: check_warnings),
             string(name: "install_mysql_shell", value: params.install_mysql_shell),
             string(name: "product_to_test", value: params.product_to_test),
-            string(name: "git_repo", value: params.git_repo)
+            string(name: "git_repo", value: params.git_repo),
+            string(name: "git_branch", value: params.git_branch),
+            string(name: "EOL", value: params.EOL)
         ],
         propagate: true,
         wait: true

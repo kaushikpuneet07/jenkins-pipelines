@@ -6,9 +6,7 @@ library changelog: false, identifier: 'lib@master', retriever: modernSCM([
 def pmm_submodules() {
     return [
         "pmm",
-        "grafana-dashboards",
         "grafana",
-        "pmm-ui-tests",
         "pmm-qa",
         "mysqld_exporter",
         "node_exporter",
@@ -16,8 +14,10 @@ def pmm_submodules() {
         "proxysql_exporter",
         "rds_exporter",
         "azure_metrics_exporter",
-        "percona-toolkit",
         "pmm-dump"
+        // percona-toolkit is excluded: it tracks a shared, long-lived branch of its
+        // own (e.g. pmm-3.9.0) rather than a per-RC branch, so the RC pipeline must
+        // not create/delete branches for it.
     ]
 }
 
@@ -123,7 +123,7 @@ String DEFAULT_BRANCH = 'v3'
 
 pipeline {
     agent {
-        label 'agent-amd64-ol9'
+        label 'agent-amd64-ondemand'
     }
     parameters {
         string(
@@ -138,7 +138,7 @@ pipeline {
         )
         string(
             defaultValue: '#pmm-internal',
-            description: 'Channel to send notifications to',
+            description: 'Slack channel to send notifications to',
             name: 'NOTIFICATION_CHANNEL'
         )
     }
@@ -152,7 +152,8 @@ pipeline {
             }
             steps {
                 script {
-                    env.TARGET_BRANCH = params.SUBMODULES_GIT_BRANCH
+                    // percona/pmm no longer has a v3 branch
+                    env.TARGET_BRANCH = (params.SUBMODULES_GIT_BRANCH == DEFAULT_BRANCH) ? 'main' : params.SUBMODULES_GIT_BRANCH
 
                     git branch: env.TARGET_BRANCH, credentialsId: 'GitHub SSH Key', poll: false, url: 'git@github.com:percona/pmm'
 
@@ -189,7 +190,7 @@ pipeline {
         }
         stage('Rewind Submodules') {
             when {
-                expression { env.REMOVE_RELEASE_BRANCH == 'no' && env.TARGET_BRANCH == DEFAULT_BRANCH && env.API_DESCRIPTOR == 'CHANGED' }
+                expression { env.REMOVE_RELEASE_BRANCH == 'no' && params.SUBMODULES_GIT_BRANCH == DEFAULT_BRANCH && env.API_DESCRIPTOR == 'CHANGED' }
             }
             steps {
                 build job: 'pmm3-submodules-rewind', propagate: false, wait: true
@@ -226,8 +227,8 @@ pipeline {
                     currentBuild.description = "$VERSION"
                     slackSend botUser: true,
                         channel: env.NOTIFICATION_CHANNEL,
-                        color: '#0892d0',
-                        message: "Release candidate PMM $VERSION build has started. You can check progress at: ${BUILD_URL}"
+                        color: '#0000FF',
+                        message: "[${JOB_NAME}]: New PMM ${VERSION} RC build has started. \nYou can check progress at: ${BUILD_URL}"
                     env.EXIST = sh (
                         script: 'git ls-remote --heads https://github.com/Percona-Lab/pmm-submodules pmm-\${VERSION} | wc -l',
                         returnStdout: true
@@ -249,7 +250,7 @@ pipeline {
             }
             steps {
                 script {
-                    rewindSubmodule = build job: 'pmm3-rewind-submodules-fb', propagate: false, parameters: [
+                    def rewindSubmodule = build job: 'pmm3-rewind-submodules-fb', propagate: false, parameters: [
                         string(name: 'GIT_BRANCH', value: RELEASE_BRANCH)
                     ]
                 }
@@ -263,9 +264,10 @@ pipeline {
                 stage('Start PMM3 Server Autobuild') {
                     steps {
                         script {
-                            pmmServer = build job: 'pmm3-server-autobuild', parameters: [
+                            def pmmServer = build job: 'pmm3-server-autobuild', parameters: [
                                 string(name: 'GIT_BRANCH', value: RELEASE_BRANCH),
-                                string(name: 'DESTINATION', value: 'testing')
+                                string(name: 'DESTINATION', value: 'testing'),
+                                booleanParam(name: 'USE_ONDEMAND', value: true)
                             ]
                             env.PMM_SERVER_IMAGE = pmmServer.buildVariables.TIMESTAMP_TAG
                         }
@@ -274,21 +276,26 @@ pipeline {
                 stage('Start PMM3 Client Autobuild') {
                     steps {
                         script {
-                            pmmClient = build job: 'pmm3-client-autobuild', parameters: [
+                            def pmmClient = build job: 'pmm3-client-autobuild', parameters: [
                                 string(name: 'GIT_BRANCH', value: RELEASE_BRANCH),
-                                string(name: 'DESTINATION', value: 'testing')
+                                string(name: 'DESTINATION', value: 'testing'),
+                                booleanParam(name: 'USE_ONDEMAND', value: true)
                             ]
                             env.TARBALL_AMD64_URL = pmmClient.buildVariables.TARBALL_AMD64_URL
                             env.TARBALL_ARM64_URL = pmmClient.buildVariables.TARBALL_ARM64_URL
+
+                            env.TARBALL_AMD64_DYNAMIC_OL8_URL = pmmClient.buildVariables.TARBALL_AMD64_DYNAMIC_OL8_URL
+                            env.TARBALL_AMD64_DYNAMIC_OL9_URL = pmmClient.buildVariables.TARBALL_AMD64_DYNAMIC_OL9_URL
                         }
                     }
                 }
                 stage('Start PMM3 Watchtower Autobuild') {
                     steps {
                         script {
-                            pmmWatchtower = build job: 'pmm3-watchtower-autobuild', parameters: [
+                            def pmmWatchtower = build job: 'pmm3-watchtower-autobuild', parameters: [
                                 string(name: 'GIT_BRANCH', value: RELEASE_BRANCH),
-                                string(name: 'TAG_TYPE', value: 'rc')
+                                string(name: 'TAG_TYPE', value: 'rc'),
+                                booleanParam(name: 'USE_ONDEMAND', value: true)
                             ]
                             env.WATCHTOWER_IMAGE = pmmWatchtower.buildVariables.TIMESTAMP_TAG
                         }
@@ -296,75 +303,70 @@ pipeline {
                 }
             }
         }
-        stage('Run OVF & AMI RC builds') {
+        stage('Start AMI RC Build') {
             when {
                 expression { env.REMOVE_RELEASE_BRANCH == "no"}
             }
-            parallel {
-                stage('Start AMI RC Build') {
-                    steps {
-                        script {
-                            pmmAMI = build job: 'pmm3-ami', parameters: [
-                                string(name: 'PMM_BRANCH', value: "pmm-${VERSION}"),
-                                string(name: 'PMM_SERVER_IMAGE', value: "docker.io/${PMM_SERVER_IMAGE}"),
-                                string(name: 'WATCHTOWER_IMAGE', value: "docker.io/${WATCHTOWER_IMAGE}"),
-                                string(name: 'RELEASE_CANDIDATE', value: "yes")
-                            ]
-                            env.AMI_ID = pmmAMI.buildVariables.AMI_ID
-                        }
-                    }
-                }
-                stage('Start OVF RC Build') {
-                    steps {
-                        script {
-                            pmmOVF = build job: 'pmm3-ovf', parameters: [
-                                string(name: 'PMM_BRANCH', value: "pmm-${VERSION}"),
-                                string(name: 'PMM_SERVER_IMAGE', value: "docker.io/${PMM_SERVER_IMAGE}"),
-                                string(name: 'WATCHTOWER_IMAGE', value: "docker.io/${WATCHTOWER_IMAGE}"),
-                                string(name: 'RELEASE_CANDIDATE', value: 'yes')
-                            ]
-                        }
-                    }
+            steps {
+                script {
+                    def pmmAMI = build job: 'pmm3-ami', parameters: [
+                        string(name: 'PMM_BRANCH', value: "pmm-${VERSION}"),
+                        string(name: 'PMM_SERVER_IMAGE', value: "docker.io/${PMM_SERVER_IMAGE}"),
+                        string(name: 'WATCHTOWER_IMAGE', value: "docker.io/${WATCHTOWER_IMAGE}"),
+                        string(name: 'RELEASE_CANDIDATE', value: "yes"),
+                        booleanParam(name: 'USE_ONDEMAND', value: true)
+                    ]
+                    env.AMI_ID = pmmAMI.buildVariables.AMI_ID
                 }
             }
         }
-        // This staging instance currently sees no use
-        // stage('Launch a staging instance') {
-        //     when {
-        //         expression { env.REMOVE_RELEASE_BRANCH == "no"}
-        //     }            
-        //     steps {
-        //         script {
-        //             pmmStaging = build job: 'pmm3-aws-staging-start', propagate: false, parameters: [
-        //                 string(name: 'DOCKER_VERSION', value: "perconalab/pmm-server:${VERSION}-rc"),
-        //                 string(name: 'CLIENT_VERSION', value: "pmm-rc"),
-        //                 string(name: 'ENABLE_TESTING_REPO', value: "yes"),
-        //                 string(name: 'ENABLE_EXPERIMENTAL_REPO', value: "no"),
-        //                 string(name: 'NOTIFY', value: "false"),
-        //                 string(name: 'DAYS', value: "14")
-        //             ]
-        //             env.IP = pmmStaging.buildVariables.IP
-        //             env.TEST_URL = env.IP ? "Testing environment (14d): https://${env.IP}" : ""
-        //         }
-        //     }
-        // }
         stage('Scan image for vulnerabilities') {
             when {
                 expression { env.REMOVE_RELEASE_BRANCH == "no"}
             }
             steps {
                 script {
-                    imageScan = build job: 'pmm3-image-scanning', propagate: false, parameters: [
-                        string(name: 'IMAGE', value: "perconalab/pmm-server"),
-                        string(name: 'TAG', value: "${VERSION}-rc")
+                    def imageScan = build job: 'pmm3-image-scanning', propagate: false, parameters: [
+                        string(name: 'PMM_CLIENT_IMAGE', value: "perconalab/pmm-client:${VERSION}-rc"),
+                        string(name: 'PMM_SERVER_IMAGE', value: "perconalab/pmm-server:${VERSION}-rc"),
+                        booleanParam(name: 'USE_ONDEMAND', value: true)
                     ]
 
                     env.SCAN_REPORT_URL = ""
                     if (imageScan.result == 'SUCCESS') {
-                        copyArtifacts filter: 'report.html', projectName: 'pmm3-image-scanning'
-                        sh 'mv report.html report-${VERSION}-rc.html'
-                        archiveArtifacts "report-${VERSION}-rc.html"
-                        env.SCAN_REPORT_URL = "CVE Scan Report: ${BUILD_URL}artifact/report-${VERSION}-rc.html"
+                        // Copy Trivy reports for both server and client
+                        copyArtifacts filter: '*-report.*', projectName: 'pmm3-image-scanning'
+                        sh '''
+                            mv trivy-server-report.txt trivy-server-report-${VERSION}-rc.txt
+                            mv trivy-server-report.html trivy-server-report-${VERSION}-rc.html
+
+                            mv trivy-client-report.txt trivy-client-report-${VERSION}-rc.txt
+                            mv trivy-client-report.html trivy-client-report-${VERSION}-rc.html
+                        '''
+                        archiveArtifacts artifacts: "*-report-${VERSION}-rc.*"
+                        env.SCAN_REPORT_URL = "${BUILD_URL}artifact/"
+                    }
+                }
+            }
+        }
+        stage('Queue RC tests') {
+            when {
+                expression { env.REMOVE_RELEASE_BRANCH == 'no' }
+            }
+            steps {
+                script {
+                    try {
+                        build job: 'pmm3-rc-testing', wait: false, propagate: false, parameters: [
+                                string(name: 'RC_VERSION', value: env.VERSION),
+                                string(name: 'PMM_CLIENT_TARBALL', value: env.TARBALL_AMD64_URL.trim()),
+                                string(name: 'PMM_CLIENT_TARBALL_ARM64', value: env.TARBALL_ARM64_URL.trim()),
+                                string(name: 'PMM_CLIENT_TARBALL_OL8', value: env.TARBALL_AMD64_DYNAMIC_OL8_URL.trim()),
+                                string(name: 'PMM_CLIENT_TARBALL_OL9', value: env.TARBALL_AMD64_DYNAMIC_OL9_URL.trim()),
+                                string(name: 'AMI_ID', value: env.AMI_ID.trim()),
+                            ]
+                        echo "[rc-tests] Release Candidate testing queued for ${env.VERSION}."
+                    } catch (Throwable e) {
+                        echo "[rc-tests] Could not queue pmm3-rc-testing: ${e.message}"
                     }
                 }
             }
@@ -375,18 +377,19 @@ pipeline {
             slackSend botUser: true,
                       channel: env.NOTIFICATION_CHANNEL,
                       color: '#00FF00',
-                      message: """New Release Candidate is out :rocket:
+                      message: """[${JOB_NAME}]: New PMM ${VERSION} RC build is out :rocket:
 Server: perconalab/pmm-server:${VERSION}-rc
 Client: perconalab/pmm-client:${VERSION}-rc
-OVA: https://percona-vm.s3.amazonaws.com/PMM3-Server-${VERSION}.ova
 AMI: ${env.AMI_ID}
 Tarball AMD64: ${env.TARBALL_AMD64_URL}
 Tarball ARM64: ${env.TARBALL_ARM64_URL}
-${env.SCAN_REPORT_URL}
+Tarball AMD64 (GSSAPI) OL8: ${env.TARBALL_AMD64_DYNAMIC_OL8_URL}
+Tarball AMD64 (GSSAPI) OL9: ${env.TARBALL_AMD64_DYNAMIC_OL9_URL}
+CVE Scan Reports: ${env.SCAN_REPORT_URL}
                       """
         }
         failure {
-            slackSend botUser: true, channel: '#pmm-internal', color: '#FF0000', message: "[${JOB_NAME}]: RC build failed :fire: - ${BUILD_URL}"
+            slackSend botUser: true, channel: env.NOTIFICATION_CHANNEL, color: '#FF0000', message: "[${JOB_NAME}]: PMM ${VERSION} RC build failed :fire: \nBuild URL: ${BUILD_URL}"
         }
     }
 }

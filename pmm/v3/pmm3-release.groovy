@@ -35,6 +35,11 @@ pipeline {
         stage('Push RPM client to public repository') {
             steps {
                 script {
+                    slackSend botUser: true,
+                        channel: '#pmm-internal',
+                        color: '#0000FF',
+                        message: "[${JOB_NAME}]: PMM ${VERSION} release has started. \nYou can check progress at: ${BUILD_URL}"                    
+                    
                     currentBuild.description = "VERSION: ${VERSION}<br>CLIENT: ${CLIENT_IMAGE}<br>SERVER: ${SERVER_IMAGE}<br>WATCHTOWER: ${WATCHTOWER_IMAGE}<br>PATH_TO_CLIENT_AMD64: ${PATH_TO_CLIENT_AMD64}<br>PATH_TO_CLIENT_ARM64: ${PATH_TO_CLIENT_ARM64}"
                     if (!params.PATH_TO_CLIENT_AMD64 || !params.PATH_TO_CLIENT_ARM64) {
                         error("ERROR: empty parameter(s) PATH_TO_CLIENT_AMD64 or PATH_TO_CLIENT_ARM64")
@@ -294,6 +299,48 @@ ENDSSH
             }
         }
 
+        stage('Upload private client tarballs to percona.com') {
+            steps {
+                withCredentials([sshUserPrivateKey(credentialsId: 'repo.ci.percona.com', keyFileVariable: 'KEY_PATH', usernameVariable: 'USER')]) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no -i ${KEY_PATH} ${USER}@repo.ci.percona.com << 'ENDSSH'
+                            set -e
+                            set -x
+
+                            # Only process AMD64 architecture (private tarballs only exist for amd64)
+                            cd /srv/UPLOAD/${PATH_TO_CLIENT_AMD64}/
+
+                            # Create temporary directory for flat structure
+                            TMPDIR="/srv/UPLOAD/${PATH_TO_CLIENT_AMD64}/.tmp-private"
+                            rm -fr \${TMPDIR} && mkdir -p \${TMPDIR}
+
+                            # Copy and process binary tarballs from different OS versions
+                            for os_dir in binary.ol8 binary.ol9; do
+                                if [ -f \${os_dir}/tarball/*.tar.gz ]; then
+                                    # Get the tarball name
+                                    _tar=\$(ls \${os_dir}/tarball/*.tar.gz)
+                                    TAR_BASENAME=\$(basename \${_tar})
+
+                                    # Rename with x86_64 suffix
+                                    TAR_NAME=\$(basename \${TAR_BASENAME} .tar.gz)-x86_64.tar.gz
+
+                                    # Copy to flat directory and generate checksum
+                                    cp \${_tar} \${TMPDIR}/\${TAR_NAME}
+                                    sha256sum \${TMPDIR}/\${TAR_NAME} > \${TMPDIR}/\${TAR_NAME}.sha256sum
+                                fi
+                            done
+
+                            # Upload to private downloads area (flat structure)
+                            rsync -avt -e "ssh -p 2222" --bwlimit=50000 --progress \${TMPDIR}/* jenkins-deploy.jenkins-deploy.web.r.int.percona.com:/data/downloads/private/pmm3-client-gssapi-tarballs/
+
+                            # Cleanup
+                            rm -fr \${TMPDIR}
+ENDSSH
+                """
+                }
+            }
+        }
+
         stage('Set Docker Tag') {
             agent {
                 label 'min-ol-9-x64'
@@ -411,24 +458,6 @@ ENDSSH
                 deleteDir()
             }
         }
-        stage('Publish OVF image') {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'pmm-staging-slave', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
-                    sh '''
-                        aws s3 cp --only-show-errors s3://percona-vm/PMM3-Server-${VERSION}.ova pmm-server-${VERSION}.ova
-                    '''
-                }
-                withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-deploy', keyFileVariable: 'KEY_PATH', usernameVariable: 'USER')]) {
-                    sh '''
-                        sha256sum pmm-server-${VERSION}.ova | tee pmm-server-${VERSION}.sha256sum
-                        export UPLOAD_HOST=$(dig +short downloads-rsync-endpoint.int.percona.com @10.30.6.12 | tail -1)
-                        ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${KEY_PATH} ${USER}@$UPLOAD_HOST "mkdir -p /data/downloads/pmm3/${VERSION}/ova"
-                        scp -P 2222 -o ConnectTimeout=1 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${KEY_PATH} pmm-server-${VERSION}.ova pmm-server-${VERSION}.sha256sum ${USER}@$UPLOAD_HOST:/data/downloads/pmm3/${VERSION}/ova/
-                    '''
-                }
-                deleteDir()
-            }
-        }
         stage('Refresh website') {
             steps {
                 sh """
@@ -465,14 +494,14 @@ ENDSSH
                                 -H "Accept: application/vnd.github.v3+json" \
                                 -H "Authorization: token ${GITHUB_API_TOKEN}" \
                                 "https://api.github.com/repos/percona/pmm-qa/actions/workflows/package-test-single.yml/dispatches" \
-                                -d '{"ref":"v3","inputs":{"playbook": "pmm3-client", "package": "pmm3-client", "repository": "release", "metrics_mode": "auto"}}'
+                                -d '{"ref":"main","inputs":{"playbook": "pmm3-client", "package": "pmm3-client", "repository": "release", "metrics_mode": "auto"}}'
                         '''
                         sh '''
                             curl -v -X POST \
                                 -H "Accept: application/vnd.github.v3+json" \
                                 -H "Authorization: token ${GITHUB_API_TOKEN}" \
                                 "https://api.github.com/repos/percona/pmm-qa/actions/workflows/e2e-upgrade-tests-matrix-full.yml/dispatches" \
-                                -d '{"ref":"v3","inputs":{"pmm_ui_tests_branch": "v3", "pmm_qa_branch": "v3", "repository": "release", "versions_range": 1}}'
+                                -d '{"ref":"main","inputs":{"pmm_ui_tests_branch": "main", "pmm_qa_branch": "main", "repository": "release", "versions_range": 1}}'
                         '''
                     }
                 }
@@ -482,16 +511,23 @@ ENDSSH
             steps {
                 script {
                     imageScan = build job: 'pmm3-image-scanning', propagate: false, parameters: [
-                        string(name: 'IMAGE', value: "perconalab/pmm-server"),
-                        string(name: 'TAG', value: "${VERSION}")
+                        string(name: 'PMM_CLIENT_IMAGE', value: "perconalab/pmm-client:${VERSION}"),
+                        string(name: 'PMM_SERVER_IMAGE', value: "perconalab/pmm-server:${VERSION}"),
+                        booleanParam(name: 'USE_ONDEMAND', value: true)
                     ]
 
                     env.SCAN_REPORT_URL = ""
                     if (imageScan.result == 'SUCCESS') {
-                        copyArtifacts filter: 'report.html', projectName: 'pmm3-image-scanning'
-                        sh 'mv report.html report-${VERSION}.html'
-                        archiveArtifacts "report-${VERSION}.html"
-                        env.SCAN_REPORT_URL = "CVE Scan Report: ${BUILD_URL}artifact/report-${VERSION}.html"
+                        copyArtifacts filter: '*-report.*', projectName: 'pmm3-image-scanning'
+                        sh '''
+                            mv trivy-server-report.txt trivy-server-report-${VERSION}.txt
+                            mv trivy-server-report.html trivy-server-report-${VERSION}.html
+
+                            mv trivy-client-report.txt trivy-client-report-${VERSION}.txt
+                            mv trivy-client-report.html trivy-client-report-${VERSION}.html
+                        '''
+                        archiveArtifacts "*-report-${VERSION}.*"
+                        env.SCAN_REPORT_URL = "${BUILD_URL}artifact/"
                     }
                 }
             }
@@ -502,11 +538,12 @@ ENDSSH
             deleteDir()
         }
         success {
-            slackSend botUser: true, channel: '#pmm', color: '#00FF00', message: "PMM ${VERSION} was released!\nBuild URL: ${BUILD_URL}\n${env.SCAN_REPORT_URL}"
-            slackSend botUser: true, channel: '#releases', color: '#00FF00', message: "PMM ${VERSION} was released!\nBuild URL: ${BUILD_URL}\n${env.SCAN_REPORT_URL}"
+            slackSend botUser: true, channel: '#pmm', color: '#00FF00', message: "[${JOB_NAME}]: PMM ${VERSION} was released! :rocket:\nBuild URL: ${BUILD_URL}\nCVE Scan Report: ${env.SCAN_REPORT_URL}"
+            slackSend botUser: true, channel: '#releases', color: '#00FF00', message: "[${JOB_NAME}]: PMM ${VERSION} was released! :rocket:\nBuild URL: ${BUILD_URL}\nCVE Scan Report: ${env.SCAN_REPORT_URL}"
+            slackSend botUser: true, channel: '#pmm-internal', color: '#00FF00', message: "[${JOB_NAME}]: PMM ${VERSION} was released! :rocket:\nBuild URL: ${BUILD_URL}\nCVE Scan Report: ${env.SCAN_REPORT_URL}"
         }
         failure {
-            slackSend botUser: true, channel: '#pmm-internal', color: '#FF0000', message: "[${JOB_NAME}]: release failed - ${BUILD_URL}"
+            slackSend botUser: true, channel: '#pmm-internal', color: '#FF0000', message: "[${JOB_NAME}]: PMM ${VERSION} release failed \nBuild URL: ${BUILD_URL}"
         }
     }
 }

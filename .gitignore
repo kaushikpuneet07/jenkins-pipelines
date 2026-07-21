@@ -3,3 +3,5 @@
 *.tfstate*
 .vscode
 .history
+.idea/*
+__pycache__

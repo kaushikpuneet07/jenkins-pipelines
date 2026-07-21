@@ -1,0 +1,77 @@
+- job:
+    name: openshift-cluster-destroy
+    project-type: pipeline
+    description: |
+        Destroy OpenShift clusters on AWS.
+
+        This job:
+        - Downloads cluster state from S3
+        - Destroys all cluster resources
+        - Cleans up S3 backup (optional)
+        - Verifies resource cleanup
+
+        WARNING: This operation is irreversible!
+
+    parameters:
+      - string:
+          name: CLUSTER_NAME
+          default: ''
+          description: 'Name of the OpenShift cluster to destroy (required)'
+          trim: true
+      - choice:
+          name: AWS_REGION
+          choices:
+            - 'us-east-2'
+          description: 'AWS region where the cluster is deployed'
+      - bool:
+          name: DRY_RUN
+          default: false
+          description: 'Perform a dry run without actually destroying resources'
+      - choice:
+          name: DESTROY_REASON
+          choices:
+            - 'manual'
+            - 'scheduled'
+            - 'cost-optimization'
+            - 'testing-complete'
+            - 'error-cleanup'
+            - 'other'
+          description: 'Reason for cluster destruction'
+      - bool:
+          name: FORCE_MODE
+          default: false
+          description: |
+            Force-destroy a cluster that has no S3 state (leaked from a failed create job).
+            Synthesizes a minimal metadata.json from the AWS-tag infraID and runs
+            openshift-install destroy without touching S3.
+      - string:
+          name: INFRA_ID
+          default: ''
+          description: |
+            AWS-tag infraID (kubernetes.io/cluster/<infraID>) shown by openshift-cluster-list.
+            When FORCE_MODE=true and this is blank, defaults to CLUSTER_NAME (which is
+            already the infraID for clusters that show up as aws-tags only).
+            Override only when CLUSTER_NAME is the base name and the infraID has a suffix.
+          trim: true
+      - string:
+          name: OPENSHIFT_VERSION
+          default: '4.16.9'
+          description: 'OpenShift version of the openshift-install binary to use in FORCE_MODE'
+          trim: true
+
+    pipeline-scm:
+      scm:
+        - git:
+            url: https://github.com/Percona-Lab/jenkins-pipelines.git
+            branches:
+              - 'master'
+            wipe-workspace: false
+      lightweight-checkout: true
+      script-path: pmm/openshift/openshift_cluster_destroy.groovy
+
+    concurrent: true
+
+    properties:
+      - build-discarder:
+          days-to-keep: 30
+          num-to-keep: 100

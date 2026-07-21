@@ -1,6 +1,6 @@
 import com.amazonaws.services.ec2.model.InstanceType
 import hudson.model.*
-import hudson.plugins.ec2.AmazonEC2Cloud
+import hudson.plugins.ec2.EC2Cloud
 import hudson.plugins.ec2.EC2Tag
 import hudson.plugins.ec2.SlaveTemplate
 import hudson.plugins.ec2.SpotConfiguration
@@ -16,12 +16,15 @@ logger.info("Cloud init started")
 // get Jenkins instance
 Jenkins jenkins = Jenkins.getInstance()
 
+// Subnet configuration for Jenkins PG workers
+// PKG-1246: Expanded from /24 (251 IPs) to /22 (1024 IPs) subnets for 1200-1500 spot instances
+// Old subnets: subnet-0fad4db6fdd8025b6 (B), subnet-0802c1d4746b8c35a (C)
 netMap = [:]
-netMap['eu-central-1b'] = 'subnet-085deaca8c1c59a4f'
-netMap['eu-central-1c'] = 'subnet-0643c0784b4e3cedd'
+netMap['eu-central-1b'] = 'subnet-0775d65ad1e9703bc'  // JSubnetB2: 10.145.0.0/22 (1024 IPs)
+netMap['eu-central-1c'] = 'subnet-09947b46d69590c50'  // JSubnetC2: 10.145.4.0/22 (1024 IPs)
 
 imageMap = [:]
-imageMap['eu-central-1a.micro-amazon'] = 'ami-01fd08d7b0955d6d5'
+imageMap['eu-central-1a.micro-amazon'] = 'ami-0444794b421ec32e4'
 imageMap['eu-central-1b.micro-amazon'] = imageMap['eu-central-1a.micro-amazon']
 imageMap['eu-central-1c.micro-amazon'] = imageMap['eu-central-1a.micro-amazon']
 
@@ -29,28 +32,40 @@ imageMap['eu-central-1a.min-centos-7-x64'] = 'ami-0afcbcee3dfbce929'
 imageMap['eu-central-1b.min-centos-7-x64'] = imageMap['eu-central-1a.min-centos-7-x64']
 imageMap['eu-central-1c.min-centos-7-x64'] = imageMap['eu-central-1a.min-centos-7-x64']
 
-imageMap['eu-central-1a.min-ol-8-x64'] = 'ami-065e2293a3df4c870'
+imageMap['eu-central-1a.min-ol-8-x64'] = 'ami-0f18276190490b6e3'
 imageMap['eu-central-1b.min-ol-8-x64'] = imageMap['eu-central-1a.min-ol-8-x64']
 imageMap['eu-central-1c.min-ol-8-x64'] = imageMap['eu-central-1a.min-ol-8-x64']
 
-imageMap['eu-central-1a.min-ol-9-x64'] = 'ami-02952e732e6126584'
+imageMap['eu-central-1a.min-ol-9-x64'] = 'ami-08b280891de0645a1'
 imageMap['eu-central-1b.min-ol-9-x64'] = imageMap['eu-central-1a.min-ol-9-x64']
 imageMap['eu-central-1c.min-ol-9-x64'] = imageMap['eu-central-1a.min-ol-9-x64']
 
+imageMap['eu-central-1a.min-al2023-x64'] = 'ami-0444794b421ec32e4'
+imageMap['eu-central-1b.min-al2023-x64'] = imageMap['eu-central-1a.min-al2023-x64']
+imageMap['eu-central-1c.min-al2023-x64'] = imageMap['eu-central-1a.min-al2023-x64']
+
+imageMap['eu-central-1a.min-al2023-aarch64'] = 'ami-0b7c9879f1e078eb1'
+imageMap['eu-central-1b.min-al2023-aarch64'] = imageMap['eu-central-1a.min-al2023-aarch64']
+imageMap['eu-central-1c.min-al2023-aarch64'] = imageMap['eu-central-1a.min-al2023-aarch64']
+
 priceMap = [:]
-priceMap['c5.large']     = '0.05' // type=c5.large, vCPU=2, memory=4GiB, saving=49%, interruption='<5%', price=0.053400
-priceMap['i3en.2xlarge'] = '0.40' // type=i3en.2xlarge, vCPU=8, memory=64GiB, saving=70%, interruption='<5%', price=0.324000
+priceMap['c5.large']     = '0.08' // type=c5.large, vCPU=2, memory=4GiB, saving=49%, interruption='<5%', price=0.053400
+priceMap['c6g.large']    = '0.07' // type=c6g.large, vCPU=2, memory=4GiB (ARM)
+priceMap['d3.2xlarge']   = '0.47' // type=d3.2xlarge, vCPU=8, memory=64GiB, saving=70%, interruption='<5%', price=0.324000
 
 userMap = [:]
-userMap['micro-amazon']     = 'ec2-user'
-userMap['min-centos-7-x64'] = 'centos'
-userMap['min-ol-8-x64']     = userMap['micro-amazon']
-userMap['min-ol-9-x64']     = userMap['micro-amazon']
+userMap['micro-amazon']       = 'ec2-user'
+userMap['min-centos-7-x64']   = 'centos'
+userMap['min-ol-8-x64']       = userMap['micro-amazon']
+userMap['min-ol-9-x64']       = userMap['micro-amazon']
+userMap['min-al2023-x64']     = userMap['micro-amazon']
+userMap['min-al2023-aarch64'] = userMap['micro-amazon']
 
 initMap = [:]
 initMap['micro-amazon'] = '''
     set -o xtrace
     RHVER=$(rpm --eval %rhel)
+
     if ! mountpoint -q /mnt; then
         for DEVICE_NAME in $(lsblk -ndpbo NAME,SIZE | sort -n -r | awk '{print $1}'); do
             if ! grep -qs "${DEVICE_NAME}" /proc/mounts; then
@@ -65,54 +80,74 @@ initMap['micro-amazon'] = '''
     fi
 
     if [[ ${RHVER} -eq 8 ]] || [[ ${RHVER} -eq 7 ]]; then
-        sudo sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
-        sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+        sudo sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* || :
+        sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-* || :
     fi
 
     until sudo yum makecache; do
         sleep 1
         echo try again
     done
-    sudo amazon-linux-extras install epel -y
-    sudo amazon-linux-extras install java-openjdk11 -y || :
-    sudo yum -y install java-11-openjdk tzdata-java git || :
+
+    sudo yum -y remove java-1.8.0-openjdk || :
+    sudo yum -y remove java-1.8.0-openjdk-headless || :
+
+    SYSREL=$(cat /etc/system-release | tr -dc '0-9.' | awk -F'.' '{print $1}')
+    if [ "${SYSREL}" = "2023" ]; then
+        JAVA_PKG="java-17-amazon-corretto"
+    else
+        JAVA_PKG="java-17-openjdk-headless"
+    fi
+    sudo yum -y install ${JAVA_PKG} tzdata-java || :
     sudo yum -y install git || :
-    sudo yum -y install awscli || :
-    sudo yum -y remove java-1.7.0-openjdk || :
+
+    echo '10.30.6.9 repo.ci.percona.com' | sudo tee -a /etc/hosts
+
     sudo install -o $(id -u -n) -g $(id -g -n) -d /mnt/jenkins
 '''
 
-initMap['min-centos-7-x64'] = initMap['micro-amazon']
-initMap['min-ol-8-x64']     = initMap['micro-amazon']
-initMap['min-ol-9-x64']     = initMap['micro-amazon']
+initMap['min-centos-7-x64']   = initMap['micro-amazon']
+initMap['min-ol-8-x64']       = initMap['micro-amazon']
+initMap['min-ol-9-x64']       = initMap['micro-amazon']
+initMap['min-al2023-x64']     = initMap['micro-amazon']
+initMap['min-al2023-aarch64'] = initMap['micro-amazon']
 
 capMap = [:]
 capMap['c5.large']     = '20'
-capMap['i3en.2xlarge'] = '40'
+capMap['c6g.large']    = '20'
+capMap['d3.2xlarge']   = '40'
 
 typeMap = [:]
-typeMap['micro-amazon']     = 'c5.large'
-typeMap['min-centos-7-x64'] = 'c5.large'
-typeMap['min-ol-8-x64']     = 'c5.large'
-typeMap['min-ol-9-x64']     = 'i3en.2xlarge'
+typeMap['micro-amazon']       = 'c5.large'
+typeMap['min-centos-7-x64']   = 'c5.large'
+typeMap['min-ol-8-x64']       = 'c5.large'
+typeMap['min-ol-9-x64']       = 'd3.2xlarge'
+typeMap['min-al2023-x64']     = 'c5.large'
+typeMap['min-al2023-aarch64'] = 'c6g.large'
 
 execMap = [:]
-execMap['micro-amazon']     = '30'
-execMap['min-centos-7-x64'] = '1'
-execMap['min-ol-8-x64']     = '1'
-execMap['min-ol-9-x64']     = '1'
+execMap['micro-amazon']       = '30'
+execMap['min-centos-7-x64']   = '1'
+execMap['min-ol-8-x64']       = '1'
+execMap['min-ol-9-x64']       = '1'
+execMap['min-al2023-x64']     = '1'
+execMap['min-al2023-aarch64'] = '1'
 
 devMap = [:]
-devMap['micro-amazon']     = '/dev/xvda=:8:true:gp2,/dev/xvdd=:80:true:gp2'
-devMap['min-centos-7-x64'] = '/dev/sda1=:8:true:gp2,/dev/sdd=:80:true:gp2'
-devMap['min-ol-8-x64']     = '/dev/sda1=:8:true:gp2,/dev/sdd=:80:true:gp2'
-devMap['min-ol-9-x64']     = '/dev/sda1=:10:true:gp2,/dev/sdd=:80:true:gp2'
+devMap['micro-amazon']       = '/dev/xvda=:20:true:gp2,/dev/xvdd=:80:true:gp2'
+devMap['min-centos-7-x64']   = '/dev/sda1=:8:true:gp2,/dev/sdd=:80:true:gp2'
+devMap['min-ol-8-x64']       = '/dev/sda1=:30:true:gp2,/dev/sdd=:80:true:gp2'
+devMap['min-ol-9-x64']       = '/dev/sda1=:30:true:gp2,/dev/sdd=:80:true:gp2'
+devMap['min-al2023-x64']     = '/dev/xvda=:30:true:gp2,/dev/xvdd=:80:true:gp2'
+devMap['min-al2023-aarch64'] = '/dev/xvda=:30:true:gp2,/dev/xvdd=:80:true:gp2'
 
 labelMap = [:]
-labelMap['micro-amazon']     = 'master'
-labelMap['min-centos-7-x64'] = 'min-centos-7-x64'
-labelMap['min-ol-8-x64']     = 'min-ol-8-x64'
-labelMap['min-ol-9-x64']     = 'min-ol-9-x64'
+labelMap['micro-amazon']       = 'master'
+labelMap['min-centos-7-x64']   = 'min-centos-7-x64'
+labelMap['min-ol-8-x64']       = 'min-ol-8-x64'
+labelMap['min-ol-9-x64']       = 'min-ol-9-x64'
+labelMap['min-al2023-x64']     = 'min-al2023-x64'
+labelMap['min-al2023-aarch64'] = 'min-al2023-aarch64'
 
 // https://github.com/jenkinsci/ec2-plugin/blob/ec2-1.41/src/main/java/hudson/plugins/ec2/SlaveTemplate.java
 SlaveTemplate getTemplate(String OSType, String AZ) {
@@ -140,7 +175,7 @@ SlaveTemplate getTemplate(String OSType, String AZ) {
             new EC2Tag('Name', 'jenkins-pg-' + OSType),
             new EC2Tag('iit-billing-tag', 'jenkins-pg-worker')
         ],                                          // List<EC2Tag> tags
-        '3',                                        // String idleTerminationMinutes
+        '15',                                       // String idleTerminationMinutes
         0,                                          // Init minimumNumberOfInstances
         0,                                          // minimumNumberOfSpareInstances
         capMap[typeMap[OSType]],                    // String instanceCapStr
@@ -173,7 +208,7 @@ String sshKeysCredentialsId = 'aws-jenkins'
 String region = 'eu-central-1'
 ('b'..'c').each {
     // https://github.com/jenkinsci/ec2-plugin/blob/ec2-1.41/src/main/java/hudson/plugins/ec2/AmazonEC2Cloud.java
-    AmazonEC2Cloud ec2Cloud = new AmazonEC2Cloud(
+    EC2Cloud ec2Cloud = new EC2Cloud(
         "AWS-Dev ${it}",                        // String cloudName
         true,                                   // boolean useInstanceProfileForCredentials
         '',                                     // String credentialsId
@@ -182,10 +217,12 @@ String region = 'eu-central-1'
         sshKeysCredentialsId,                   // String sshKeysCredentialsId
         '240',                                   // String instanceCapStr
         [
-            getTemplate('micro-amazon',      "${region}${it}"),
-            getTemplate('min-centos-7-x64',  "${region}${it}"),
-            getTemplate('min-ol-8-x64',      "${region}${it}"),
-            getTemplate('min-ol-9-x64',      "${region}${it}"),
+            getTemplate('micro-amazon',        "${region}${it}"),
+            getTemplate('min-centos-7-x64',    "${region}${it}"),
+            getTemplate('min-ol-8-x64',        "${region}${it}"),
+            getTemplate('min-ol-9-x64',        "${region}${it}"),
+            getTemplate('min-al2023-x64',      "${region}${it}"),
+            getTemplate('min-al2023-aarch64',  "${region}${it}"),
         ],                                       // List<? extends SlaveTemplate> templates
         '',
         ''
@@ -193,7 +230,7 @@ String region = 'eu-central-1'
 
     // add cloud configuration to Jenkins
     jenkins.clouds.each {
-        if (it.hasProperty('cloudName') && it['cloudName'] == ec2Cloud['cloudName']) {
+        if (it.hasProperty('name') && it.name == ec2Cloud.name) {
             jenkins.clouds.remove(it)
         }
     }

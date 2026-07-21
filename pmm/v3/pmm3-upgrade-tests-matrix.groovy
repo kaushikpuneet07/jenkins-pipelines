@@ -3,41 +3,57 @@ library changelog: false, identifier: 'lib@master', retriever: modernSCM([
     remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
 ]) _
 
-void runUpgradeJob(String PMM_UI_GIT_BRANCH, PMM_VERSION, PMM_SERVER_LATEST, ENABLE_TESTING_REPO, ENABLE_EXPERIMENTAL_REPO, PERFORM_DOCKER_WAY_UPGRADE, PMM_SERVER_TAG) {
-    upgradeJob = build job: 'pmm-upgrade-tests', parameters: [
-        string(name: 'PMM_UI_GIT_BRANCH', value: PMM_UI_GIT_BRANCH),
-        string(name: 'CLIENT_VERSION', value: PMM_VERSION),
-        string(name: 'DOCKER_VERSION', value: PMM_VERSION),
-        string(name: 'PMM_SERVER_LATEST', value: PMM_SERVER_LATEST),
-        string(name: 'ENABLE_TESTING_REPO', value: ENABLE_TESTING_REPO),
-        string(name: 'ENABLE_EXPERIMENTAL_REPO', value: ENABLE_EXPERIMENTAL_REPO),
-        string(name: 'PERFORM_DOCKER_WAY_UPGRADE', value: PERFORM_DOCKER_WAY_UPGRADE),
-        string(name: 'PMM_SERVER_TAG', value: PMM_SERVER_TAG)
+def pmmVersions = pmmVersion('v3')[-6..-1]
+def latestVersion = pmmVersion('v3').last()
+def oldVersions = pmmVersion('v3-old')
+
+void runUpgradeJob(String PMM_UI_PRE_UPGRADE_GIT_BRANCH, DOCKER_TAG, DOCKER_TAG_UPGRADE, CLIENT_VERSION, CLIENT_REPOSITORY, PMM_QA_GIT_BRANCH, latestVersion, UPGRADE_TYPE) {
+    upgradeJob = build job: 'pmm3-upgrade-tests', parameters: [
+        string(name: 'PMM_UI_PRE_UPGRADE_GIT_BRANCH', value: PMM_UI_PRE_UPGRADE_GIT_BRANCH),
+        string(name: 'DOCKER_TAG', value: DOCKER_TAG),
+        string(name: 'DOCKER_TAG_UPGRADE', value: DOCKER_TAG_UPGRADE),
+        string(name: 'CLIENT_VERSION', value: CLIENT_VERSION),
+        string(name: 'CLIENT_REPOSITORY', value: CLIENT_REPOSITORY),
+        string(name: 'PMM_SERVER_LATEST', value: latestVersion),
+        string(name: 'PMM_QA_GIT_BRANCH', value: PMM_QA_GIT_BRANCH),
+        string(name: 'UPGRADE_TYPE', value: UPGRADE_TYPE),
     ]
 }
 
-def versions = pmmVersion('list')
-def parallelStagesMatrix = versions.collectEntries {
-    ["${it}" : generateStage(it)]
+def generateVariants(String PMM_QA_GIT_BRANCH, pmmVersions, oldVersions, latestVersion, UPGRADE_TYPE) {
+    def results = new HashMap<>();
+
+    for (pmmVersion in pmmVersions) {
+        if(pmmVersion == pmmVersions.last()) {
+            def pmmClientVersion = 'pmm3-rc';
+            def LATEST_PMM_VERSION = sh(returnStdout: true, script: "curl -fsSL https://raw.githubusercontent.com/Percona-Lab/pmm-submodules/v3/VERSION").trim()
+            print "LATEST PMM VERSION IS: ${LATEST_PMM_VERSION}"
+            results.put(
+                "Run matrix upgrade tests from version: \"$pmmVersion\"",
+                generateStage("pmm-${pmmVersion}", "perconalab/pmm-server:${pmmVersion}-rc", 'perconalab/pmm-server:3-dev-latest', pmmClientVersion, 'experimental', PMM_QA_GIT_BRANCH, LATEST_PMM_VERSION, UPGRADE_TYPE)
+            )
+        } else {
+            def pmmClientVersion = pmmVersion in oldVersions ? "https://downloads.percona.com/downloads/pmm3/${pmmVersion}/binary/tarball/pmm-client-${pmmVersion}-x86_64.tar.gz" : pmmVersion;
+            println pmmClientVersion
+            results.put(
+                "Run matrix upgrade tests from version: \"$pmmVersion\"",
+                generateStage("pmm-${pmmVersion}", 'percona/pmm-server:' + pmmVersion, "perconalab/pmm-server:${pmmVersions.last()}-rc", pmmClientVersion, 'testing', PMM_QA_GIT_BRANCH, latestVersion, UPGRADE_TYPE)
+            )
+        }
+    }
+
+    return results;
 }
 
-def generateStage(VERSION) {
+def generateStage(String PMM_UI_PRE_UPGRADE_GIT_BRANCH, DOCKER_TAG, DOCKER_TAG_UPGRADE, CLIENT_VERSION, CLIENT_REPOSITORY, PMM_QA_GIT_BRANCH, latestVersion, UPGRADE_TYPE) {
     return {
-        stage("${VERSION}") {
-            runUpgradeJob(
-                PMM_UI_GIT_BRANCH,
-                VERSION,
-                PMM_SERVER_LATEST,
-                ENABLE_TESTING_REPO,
-                ENABLE_EXPERIMENTAL_REPO,
-                PERFORM_DOCKER_WAY_UPGRADE,
-                PMM_SERVER_TAG
-            )
+        stage("Run \"$pmmVersion\" upgrade tests") {
+            runUpgradeJob(PMM_UI_PRE_UPGRADE_GIT_BRANCH, DOCKER_TAG, DOCKER_TAG_UPGRADE, CLIENT_VERSION, CLIENT_REPOSITORY, PMM_QA_GIT_BRANCH, latestVersion, UPGRADE_TYPE);
         }
     }
 }
 
-def latestVersion = pmmVersion()
+
 
 pipeline {
     agent {
@@ -45,58 +61,26 @@ pipeline {
     }
     parameters {
         string(
-            defaultValue: 'v3',
-            description: 'Tag/Branch for pmm-ui-tests repository',
-            name: 'PMM_UI_GIT_BRANCH')
-        string(
-            defaultValue: latestVersion,
-            description: '3-dev-latest PMM Server Version',
-            name: 'PMM_SERVER_LATEST')
-        string(
-            defaultValue: latestVersion,
-            description: 'RC PMM Server Version',
-            name: 'PMM_SERVER_RC')
+            defaultValue: 'main',
+            description: 'Tag/Branch for pmm-qa repository',
+            name: 'PMM_QA_GIT_BRANCH')
         choice(
-            choices: ['no', 'yes'],
-            description: 'Enable Testing Repo for RC',
-            name: 'ENABLE_TESTING_REPO')
-        choice(
-            choices: ['yes', 'no'],
-            description: 'Enable EXPERIMENTAL Repo for Dev-latest',
-            name: 'ENABLE_EXPERIMENTAL_REPO')
-        choice(
-            choices: ['no', 'yes'],
-            description: 'Perform Docker way Upgrade using this option',
-            name: 'PERFORM_DOCKER_WAY_UPGRADE')
-        string(
-            defaultValue: 'perconalab/pmm-server:3-dev-latest',
-            description: 'PMM Server Tag to be Upgraded to via Docker way Upgrade',
-            name: 'PMM_SERVER_TAG')
+            choices: ["UI", "DOCKER"],
+            description: 'Way to upgrade PMM Server (UI or Docker)',
+            name: 'UPGRADE_TYPE')
     }
     options {
         disableConcurrentBuilds()
     }
-    triggers {
-        cron('0 3 * * *')
-    }
-    stages{
-        stage('Upgrade Matrix'){
-            steps{
+    stages {
+        stage('UI tests Upgrade Matrix') {
+            steps {
                 script {
-                    parallel parallelStagesMatrix
-                }
-            }
-        }
-    }
-    post {
-        always {
-            script {
-                if (currentBuild.result == null || currentBuild.result == 'SUCCESS') {
-                    slackSend channel: '#pmm-notifications', color: '#00FF00', message: "[${JOB_NAME}]: build finished - ${BUILD_URL} "
-                } else {
-                    slackSend channel: '#pmm-notifications', color: '#FF0000', message: "[${JOB_NAME}]: build ${currentBuild.result} - ${BUILD_URL}"
+                    currentBuild.description = "${env.UPGRADE_TYPE} Upgrade matrix job"
+                    parallel generateVariants(PMM_QA_GIT_BRANCH, pmmVersions, oldVersions, latestVersion, UPGRADE_TYPE)
                 }
             }
         }
     }
 }
+

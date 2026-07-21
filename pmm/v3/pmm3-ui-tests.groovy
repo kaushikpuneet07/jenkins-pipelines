@@ -10,7 +10,7 @@ library changelog: false, identifier: 'v3lib@master', retriever: modernSCM(
 
 pipeline {
     agent {
-        label 'agent-amd64-ol9'
+        label 'agent-amd64'
     }
     environment {
         AZURE_CLIENT_ID=credentials('AZURE_CLIENT_ID');
@@ -32,35 +32,48 @@ pipeline {
         GCP_MYSQL80_HOST=credentials('GCP_MYSQL80_HOST');
         GCP_MYSQL80_USER=credentials('GCP_MYSQL80_USER');
         GCP_MYSQL80_PASSWORD=credentials('GCP_MYSQL80_PASSWORD');
-        GCP_MYSQL56_HOST=credentials('GCP_MYSQL56_HOST');
-        GCP_MYSQL56_USER=credentials('GCP_MYSQL56_USER');
-        GCP_MYSQL56_PASSWORD=credentials('GCP_MYSQL56_PASSWORD');
+        GCP_MYSQL84_HOST=credentials('GCP_MYSQL84_HOST');
+        GCP_MYSQL84_USER=credentials('GCP_MYSQL84_USER');
+        GCP_MYSQL84_PASSWORD=credentials('GCP_MYSQL84_PASSWORD');
         GCP_PGSQL13_HOST=credentials('GCP_PGSQL13_HOST');
         GCP_PGSQL13_USER=credentials('GCP_PGSQL13_USER');
         GCP_PGSQL13_PASSWORD=credentials('GCP_PGSQL13_PASSWORD');
-        GCP_PGSQL12_HOST=credentials('GCP_PGSQL12_HOST');
-        GCP_PGSQL12_USER=credentials('GCP_PGSQL12_USER');
-        GCP_PGSQL12_PASSWORD=credentials('GCP_PGSQL12_PASSWORD');
         GCP_PGSQL14_HOST=credentials('GCP_PGSQL14_HOST');
         GCP_PGSQL14_USER=credentials('GCP_PGSQL14_USER');
         GCP_PGSQL14_PASSWORD=credentials('GCP_PGSQL14_PASSWORD');
-        GCP_PGSQL11_HOST=credentials('GCP_PGSQL11_HOST');
-        GCP_PGSQL11_USER=credentials('GCP_PGSQL11_USER');
-        GCP_PGSQL11_PASSWORD=credentials('GCP_PGSQL11_PASSWORD');
-        GCP_PGSQL10_HOST=credentials('GCP_PGSQL10_HOST');
-        GCP_PGSQL10_USER=credentials('GCP_PGSQL10_USER');
-        GCP_PGSQL10_PASSWORD=credentials('GCP_PGSQL10_PASSWORD');
-        GCP_PGSQL96_HOST=credentials('GCP_PGSQL96_HOST');
-        GCP_PGSQL96_USER=credentials('GCP_PGSQL96_USER');
-        GCP_PGSQL96_PASSWORD=credentials('GCP_PGSQL96_PASSWORD');
+        GCP_PGSQL15_HOST=credentials('GCP_PGSQL15_HOST');
+        GCP_PGSQL15_USER=credentials('GCP_PGSQL15_USER');
+        GCP_PGSQL15_PASSWORD=credentials('GCP_PGSQL15_PASSWORD');
+        GCP_PGSQL16_HOST=credentials('GCP_PGSQL16_HOST');
+        GCP_PGSQL16_USER=credentials('GCP_PGSQL16_USER');
+        GCP_PGSQL16_PASSWORD=credentials('GCP_PGSQL16_PASSWORD');
+        GCP_PGSQL17_HOST=credentials('GCP_PGSQL17_HOST');
+        GCP_PGSQL17_USER=credentials('GCP_PGSQL17_USER');
+        GCP_PGSQL17_PASSWORD=credentials('GCP_PGSQL17_PASSWORD');
         REMOTE_AWS_MYSQL_USER=credentials('pmm-dev-mysql-remote-user')
         REMOTE_AWS_MYSQL_PASSWORD=credentials('pmm-dev-remote-password')
         REMOTE_AWS_MYSQL57_HOST=credentials('pmm-dev-mysql57-remote-host')
         REMOTE_AWS_MYSQL80_HOST=credentials('REMOTE_AWS_MYSQL80_HOST')
         REMOTE_AWS_MYSQL80_USER=credentials('REMOTE_AWS_MYSQL80_USER')
         REMOTE_AWS_MYSQL80_PASSWORD=credentials('REMOTE_AWS_MYSQL80_PASSWORD')
-        REMOTE_AWS_POSTGRES12_USER=credentials('pmm-qa-postgres-12-user')
-        REMOTE_AWS_POSTGRES12_PASSWORD=credentials('pmm-qa-postgres-12-password')
+        PMM_QA_MYSQL_RDS_8_4_HOST=credentials('PMM_QA_MYSQL_RDS_8_4_HOST')
+        PMM_QA_MYSQL_RDS_8_4_USER=credentials('PMM_QA_MYSQL_RDS_8_4_USER')
+        PMM_QA_MYSQL_RDS_8_4_PASSWORD=credentials('PMM_QA_MYSQL_RDS_8_4_PASSWORD')
+        PMM_QA_RDS_PGSQL13_HOST=credentials('PMM_QA_RDS_PGSQL13_HOST')
+        PMM_QA_RDS_PGSQL13_USER=credentials('PMM_QA_RDS_PGSQL13_USER')
+        PMM_QA_RDS_PGSQL13_PASSWORD=credentials('PMM_QA_RDS_PGSQL13_PASSWORD')
+        PMM_QA_RDS_PGSQL14_HOST=credentials('PMM_QA_RDS_PGSQL14_HOST')
+        PMM_QA_RDS_PGSQL14_USER=credentials('PMM_QA_RDS_PGSQL14_USER')
+        PMM_QA_RDS_PGSQL14_PASSWORD=credentials('PMM_QA_RDS_PGSQL14_PASSWORD')
+        PMM_QA_RDS_PGSQL15_HOST=credentials('PMM_QA_RDS_PGSQL15_HOST')
+        PMM_QA_RDS_PGSQL15_USER=credentials('PMM_QA_RDS_PGSQL15_USER')
+        PMM_QA_RDS_PGSQL15_PASSWORD=credentials('PMM_QA_RDS_PGSQL15_PASSWORD')
+        PMM_QA_RDS_PGSQL16_HOST=credentials('PMM_QA_RDS_PGSQL16_HOST')
+        PMM_QA_RDS_PGSQL16_USER=credentials('PMM_QA_RDS_PGSQL16_USER')
+        PMM_QA_RDS_PGSQL16_PASSWORD=credentials('PMM_QA_RDS_PGSQL16_PASSWORD')
+        PMM_QA_RDS_PGSQL17_HOST=credentials('PMM_QA_RDS_PGSQL17_HOST')
+        PMM_QA_RDS_PGSQL17_USER=credentials('PMM_QA_RDS_PGSQL17_USER')
+        PMM_QA_RDS_PGSQL17_PASSWORD=credentials('PMM_QA_RDS_PGSQL17_PASSWORD')
         REMOTE_MYSQL_HOST=credentials('mysql-remote-host')
         REMOTE_MYSQL_USER=credentials('mysql-remote-user')
         REMOTE_MYSQL_PASSWORD=credentials('mysql-remote-password')
@@ -96,15 +109,21 @@ pipeline {
         PMM_QA_AURORA2_MYSQL_PASSWORD=credentials('PMM_QA_AURORA2_MYSQL_PASSWORD')
         PMM_QA_AURORA3_MYSQL_HOST=credentials('PMM_QA_AURORA3_MYSQL_HOST')
         PMM_QA_AURORA3_MYSQL_PASSWORD=credentials('PMM_QA_AURORA3_MYSQL_PASSWORD')
+        PMM_QA_RDS_AURORA_PGSQL15_HOST=credentials('PMM_QA_RDS_AURORA_PGSQL15_HOST')
+        PMM_QA_RDS_AURORA_PGSQL15_USER=credentials('PMM_QA_RDS_AURORA_PGSQL15_USER')
+        PMM_QA_RDS_AURORA_PGSQL15_PASSWORD=credentials('PMM_QA_RDS_AURORA_PGSQL15_PASSWORD')
+        PMM_QA_RDS_AURORA_PGSQL16_HOST=credentials('PMM_QA_RDS_AURORA_PGSQL16_HOST')
+        PMM_QA_RDS_AURORA_PGSQL16_USER=credentials('PMM_QA_RDS_AURORA_PGSQL16_USER')
+        PMM_QA_RDS_AURORA_PGSQL16_PASSWORD=credentials('PMM_QA_RDS_AURORA_PGSQL16_PASSWORD')
         PMM_QA_AWS_ACCESS_KEY_ID=credentials('PMM_QA_AWS_ACCESS_KEY_ID')
         PMM_QA_AWS_ACCESS_KEY=credentials('PMM_QA_AWS_ACCESS_KEY')
         ZEPHYR_PMM_API_KEY=credentials('ZEPHYR_PMM_API_KEY')
     }
     parameters {
         string(
-            defaultValue: 'v3',
-            description: 'Tag/Branch for pmm-ui-tests repository',
-            name: 'GIT_BRANCH')
+            defaultValue: 'main',
+            description: 'Tag/Branch for pmm-qa repository',
+            name: 'PMM_QA_GIT_BRANCH')
         string(
             defaultValue: '',
             description: 'Commit hash for the branch',
@@ -141,10 +160,6 @@ pipeline {
             defaultValue: 'proxysql/proxysql:2.3.0',
             description: 'ProxySQL Docker Container Image',
             name: 'PROXYSQL_IMAGE')
-        string(
-            defaultValue: 'v3',
-            description: 'Tag/Branch for qa-integration repository',
-            name: 'PMM_QA_GIT_BRANCH')
         text(
             defaultValue: '--database psmdb,COMPOSE_PROFILES=extra',
             description: '''
@@ -183,11 +198,10 @@ pipeline {
                         env.PMM_REPO="testing"
                     }
                 }
-                // clean up workspace and fetch pmm-ui-tests repository
                 deleteDir()
                 git poll: false,
-                    branch: GIT_BRANCH,
-                    url: 'https://github.com/percona/pmm-ui-tests.git'
+                    branch: PMM_QA_GIT_BRANCH,
+                    url: 'https://github.com/percona/pmm-qa.git'
 
                 sh '''
                     sudo ln -s /usr/bin/chromium-browser /usr/bin/chromium
@@ -207,23 +221,27 @@ pipeline {
                 stage('Setup Server Instance') {
                     steps {
                         withCredentials([aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'AMI/OVF', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-                            sh """
-                                docker network create pmm-qa || true
-                                aws ecr-public get-login-password --region us-east-1 | docker login -u AWS --password-stdin public.ecr.aws/e7j3v3n0
-                                PWD=\$(pwd) MONGO_IMAGE=\${MONGO_IMAGE} POSTGRES_IMAGE=\${POSTGRES_IMAGE} PROXYSQL_IMAGE=\${PROXYSQL_IMAGE} PMM_SERVER_IMAGE=\${DOCKER_VERSION} docker-compose up -d
-                                docker network connect pmm-qa pmm-server || true
-                            """
+                            dir('codeceptjs-e2e') {
+                                sh """
+                                    docker network create pmm-qa || true
+                                    aws ecr-public get-login-password --region us-east-1 | docker login -u AWS --password-stdin public.ecr.aws/e7j3v3n0
+                                    PWD=\$(pwd) MONGO_IMAGE=\${MONGO_IMAGE} POSTGRES_IMAGE=\${POSTGRES_IMAGE} PROXYSQL_IMAGE=\${PROXYSQL_IMAGE} PMM_SERVER_IMAGE=\${DOCKER_VERSION} docker-compose up -d
+                                    docker network connect pmm-qa pmm-server || true
+                                """
+                            }
                         }
                         waitForContainer('pmm-server', 'pmm-managed entered RUNNING state')
                         waitForContainer('pmm-agent_mongo', 'waiting for connections on port 27017')
                         waitForContainer('pmm-agent_mysql_5_7', "Server hostname (bind-address):")
                         waitForContainer('pmm-agent_postgres', 'PostgreSQL init process complete; ready for start up.')
                         sh '''
-                            docker exec pmm-server change-admin-password ${ADMIN_PASSWORD}
+                            timeout 60 bash -c 'until [ "$(curl -s -o /dev/null -w "%{http_code}" --user "admin:${ADMIN_PASSWORD}" http://127.0.0.1/v1/server/readyz)" = "200" ]; do sleep 5; done'
                         '''
-                        sh '''
-                            bash -x testdata/db_setup.sh
-                        '''
+                        dir('codeceptjs-e2e') {
+                            sh '''
+                                bash -x testdata/db_setup.sh
+                            '''
+                        }
                         script {
                             env.SERVER_IP = "127.0.0.1"
                             env.PMM_UI_URL = "http://${env.SERVER_IP}/"
@@ -257,14 +275,12 @@ pipeline {
                             export PMM_CLIENT_VERSION="3-dev-latest"
                         fi
 
-                        sudo mkdir -p /srv/qa-integration || :
-                        pushd /srv/qa-integration
-                            sudo git clone --single-branch --branch ${PMM_QA_GIT_BRANCH} https://github.com/Percona-Lab/qa-integration.git .
-                        popd
+                        sudo rm -rf /srv/pmm-qa
+                        sudo mkdir -p /srv/pmm-qa
+                        sudo rsync -a ${WORKSPACE}/ /srv/pmm-qa/
+                        sudo chown -R ec2-user:ec2-user /srv/pmm-qa
 
-                        sudo chown ec2-user -R /srv/qa-integration
-
-                        pushd /srv/qa-integration/pmm_qa
+                        pushd /srv/pmm-qa/qa-integration/pmm_qa
                             echo "Setting docker based PMM clients"
                             python3 -m venv virtenv
                             . virtenv/bin/activate
@@ -284,7 +300,7 @@ pipeline {
                 stage('Connectivity check') {
                     steps {
                         sh '''
-                            if ! timeout 100 bash -c "until curl -sf ${PMM_URL}/ping; do sleep 1; done"; then
+                            if ! timeout 100 bash -c "until curl -sf ${PMM_URL}/v1/server/readyz; do sleep 1; done"; then
                                 echo "PMM Server did not pass the connectivity check" >&2
                                 exit 1
                             fi
@@ -293,10 +309,12 @@ pipeline {
                 }
                 stage('Setup Node') {
                     steps {
-                        sh """
-                            npm ci
-                            envsubst < env.list > env.generated.list
-                        """
+                        dir('codeceptjs-e2e') {
+                            sh '''
+                                npm ci
+                                envsubst < env.list > env.generated.list
+                            '''
+                        }
                     }
                 }
             }
@@ -310,16 +328,18 @@ pipeline {
                     env.CODECEPT_TAG = "'" + "${TAG}" + "'"
                 }
                 withCredentials([aws(accessKeyVariable: 'BACKUP_LOCATION_ACCESS_KEY', credentialsId: 'BACKUP_E2E_TESTS', secretKeyVariable: 'BACKUP_LOCATION_SECRET_KEY'), aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'PMM_AWS_DEV', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-                    sh """
-                        sed -i 's+http://localhost/+${PMM_UI_URL}/+g' pr.codecept.js
-                        export PWD=\$(pwd);
-                        export PATH=\$PATH:/usr/sbin
-                        if [[ \$CLIENT_VERSION != 3-dev-latest ]]; then
-                           export PATH="`pwd`/pmm-client/bin:$PATH"
-                        fi
-                        export CHROMIUM_PATH=/usr/bin/chromium
-                        ./node_modules/.bin/codeceptjs run --reporter mocha-multi -c pr.codecept.js --grep ${CODECEPT_TAG}
-                    """
+                    dir('codeceptjs-e2e') {
+                        sh """
+                            sed -i 's+http://localhost/+${env.PMM_UI_URL}/+g' pr.codecept.js
+                            export PWD=\$(pwd);
+                            export PATH=\$PATH:/usr/sbin
+                            if [[ "\$CLIENT_VERSION" != 3-dev-latest ]]; then
+                               export PATH="`pwd`/pmm-client/bin:$PATH"
+                            fi
+                            export CHROMIUM_PATH=/usr/bin/chromium
+                            ./node_modules/.bin/codeceptjs run --reporter mocha-multi -c pr.codecept.js --grep ${CODECEPT_TAG}
+                        """
+                    }
                 }
             }
         }
@@ -339,13 +359,13 @@ pipeline {
                 docker exec pmm-server cat /srv/logs/pmm-agent.log > pmm-agent-full.log || true
                 docker stop webhookd || true
                 docker rm webhookd || true
-                docker-compose down || true
+                cd codeceptjs-e2e && docker-compose down || true
                 docker rm -f $(sudo docker ps -a -q) || true
                 docker volume rm $(sudo docker volume ls -q) || true
                 sudo chown -R ec2-user:ec2-user . || true
             '''
             script {
-                env.PATH_TO_REPORT_RESULTS = 'tests/output/*.xml'
+                env.PATH_TO_REPORT_RESULTS = 'codeceptjs-e2e/tests/output/*.xml'
                 archiveArtifacts artifacts: 'pmm-managed-full.log'
                 archiveArtifacts artifacts: 'pmm-agent-full.log'
                 archiveArtifacts artifacts: 'logs.zip'
@@ -368,7 +388,7 @@ pipeline {
         }
         failure {
             script {
-                archiveArtifacts artifacts: 'tests/output/*.png'
+                archiveArtifacts artifacts: 'codeceptjs-e2e/tests/output/*.png'
                 slackSend botUser: true, channel: '#pmm-notifications', color: '#FF0000', message: "[${JOB_NAME}]: build ${currentBuild.result}, URL: ${BUILD_URL}"
             }
         }
