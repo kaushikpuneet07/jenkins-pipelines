@@ -1,6 +1,6 @@
-library changelog: false, identifier: "lib@master", retriever: modernSCM([
+library changelog: false, identifier: "lib@fix-upgrade-pdpxc", retriever: modernSCM([
     $class: 'GitSCMSource',
-    remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
+    remote: 'https://github.com/kaushikpuneet07/jenkins-pipelines.git'
 ])
 
 def extractMajorVersion(version) {
@@ -221,12 +221,12 @@ pipeline {
 
 
   }
-    post {
-        always {
-          script {
-              def selectedOSList = (env.VERSION.startsWith('8.4')) ? pdpxcOperatingSystems84() : pdpxcOperatingSystems80()
-              moleculeParallelPostDestroyALL(allOS, selectedOSList, env.MOLECULE_DIR)
-         }
-      }
-   }
+#    post {
+#        always {
+#          script {
+#              def selectedOSList = (env.VERSION.startsWith('8.4')) ? pdpxcOperatingSystems84() : pdpxcOperatingSystems80()
+#              moleculeParallelPostDestroyALL(allOS, selectedOSList, env.MOLECULE_DIR)
+#         }
+#      }
+#   }
 }
