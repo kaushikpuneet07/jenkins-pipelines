@@ -1,6 +1,6 @@
-library changelog: false, identifier: "lib@master", retriever: modernSCM([
+library changelog: false, identifier: "lib@fix-pdps-97", retriever: modernSCM([
     $class: 'GitSCMSource',
-    remote: 'https://github.com/Percona-Lab/jenkins-pipelines.git'
+    remote: 'https://github.com/kaushikpuneet07/jenkins-pipelines.git'
 ])
 
 pipeline {
@@ -106,7 +106,7 @@ pipeline {
         stage('Check version param and checkout') {
             steps {
                 checkOrchVersionParam()
-                git poll: false, branch: TESTING_BRANCH, url: "https://github.com/${TESTING_GIT_ACCOUNT}/package-testing.git"
+                git poll: false, branch: fix-pdps-97, url: "https://github.com/kaushikpuneet07/package-testing.git"
             }
         }
         stage('Test') {
