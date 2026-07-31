@@ -106,7 +106,7 @@ pipeline {
         stage('Check version param and checkout') {
             steps {
                 checkOrchVersionParam()
-                git poll: false, branch: fix-pdps-97, url: "https://github.com/kaushikpuneet07/package-testing.git"
+                git poll: false, branch: "fix-pdps-97", url: "https://github.com/kaushikpuneet07/package-testing.git"
             }
         }
         stage('Test') {
